@@ -1,43 +1,89 @@
-# Prime Purchase Telegram Store Bot + Google Sheets + IMB Payment
+# Prime Purchase Telegram Inventory Bot
 
-Ye template legitimate digital products/services ke liye hai. Third-party accounts, credentials, ya platform-policy violate karne wali items sell/deliver karne ke liye use na karein.
+Ye project legitimate digital inventory, access codes, vouchers, license keys, ya apne allowed product items ke liye hai. Third-party accounts/credentials ya policy-violating items sell/deliver karne ke liye use na karein.
 
 ## Flow
 
-1. Customer `/products` se active items dekhta hai.
-2. Customer `/buy PRODUCT_ID` bhejta hai.
-3. Bot Google Sheet me pending order banata hai.
-4. Bot IMB Payment Gateway order create karke payment link aur UPI app links bhejta hai.
-5. IMB webhook payment success par Sheet order status `paid` kar deta hai.
-6. Bot customer ko confirmation bhejta hai. Fulfilment manual/compliant rakha gaya hai.
+1. Customer `/start` ya `/products` se 1 Month aur 6 Month plans dekhta hai.
+2. Bot plan price aur remaining stock Google Sheet se dikhata hai.
+3. Customer button se quantity select karta hai, ya command use karta hai: `/buy 1m 2`.
+4. Bot selected quantity ke items reserve karta hai aur pending order banata hai.
+5. IMB payment link/UPI app links customer ko milte hain.
+6. Payment success webhook ke baad reserved items `sold` mark hote hain.
+7. Customer ko purchased inventory items Telegram par deliver ho jate hain.
+8. Dashboard tab me price, stock, sold count, aur total sales update hoti hai.
 
 ## Google Sheet tabs
 
-Bot first run par headers create kar dega.
+Bot `/sync` ya first run par ye tabs aur headers create kar dega.
 
-`Products`
+`1 Month Inventory`
 
 ```text
-product_id | name | price_inr | description | active
+item_id | item_value | password_or_pin | added_date | status | sold_to_username | telegram_user_id | order_id | purchase_date | notes
 ```
 
-Example row:
+`6 Month Inventory`
 
 ```text
-course_basic | Basic Course | 499 | Recorded course access | yes
+item_id | item_value | password_or_pin | added_date | status | sold_to_username | telegram_user_id | order_id | purchase_date | notes
+```
+
+Inventory add karne ka simple tareeka: `item_value` column me apna legal item/code add karein. Bot next sync/run par blank fields auto fill karega:
+
+- `item_id`
+- `password_or_pin`
+- `added_date`
+- `status = available`
+
+`Dashboard`
+
+```text
+key | value | description
+```
+
+Editable keys:
+
+```text
+1_month_price
+6_month_price
+default_password_or_pin
+```
+
+Auto summary keys:
+
+```text
+total_sales_amount
+1_month_sold
+1_month_remaining
+6_month_sold
+6_month_remaining
 ```
 
 `Orders`
 
 ```text
-order_id | telegram_user_id | username | product_id | product_name | amount_inr | status | payment_link_id | payment_link_url | created_at | paid_at | notes
+order_id | telegram_user_id | username | plan_id | plan_name | quantity | amount_inr | status | gateway_txn_id | payment_link_url | item_ids | delivered_items | created_at | paid_at | notes
 ```
+
+## Bot commands
+
+```text
+/start
+/products
+/buy 1m 2
+/buy 6m 1
+/orders
+/dashboard
+/sync
+```
+
+`/dashboard` aur `/sync` sirf admin Telegram IDs ke liye hain.
 
 ## Setup
 
 ```powershell
-cd "C:\Users\hp658\Desktop\New folder (2)\legit-telegram-store-bot"
-python -m venv .venv
+cd "C:\Users\hp658\Desktop\New folder (2)\Prime Purchase"
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
@@ -48,53 +94,21 @@ Fill `.env`:
 - `TELEGRAM_BOT_TOKEN`: BotFather token.
 - `ADMIN_TELEGRAM_IDS`: comma-separated admin Telegram numeric IDs.
 - `GOOGLE_SHEET_ID`: Sheet URL me `/d/.../edit` ke beech wala ID.
-- `GOOGLE_SERVICE_ACCOUNT_FILE`: Google service account JSON file path.
-- `GOOGLE_SERVICE_ACCOUNT_JSON`: Cloud hosting par service account JSON ka full one-line value.
+- `GOOGLE_SERVICE_ACCOUNT_FILE`: local JSON file path.
+- `GOOGLE_SERVICE_ACCOUNT_JSON`: Render/cloud par service account JSON ka full one-line value.
 - `IMB_USER_TOKEN`: IMB Payment Gateway API token.
 - `IMB_CREATE_ORDER_URL`: IMB create order endpoint.
 - `IMB_CHECK_STATUS_URL`: IMB status check endpoint.
-- `EXISTING_WEBSITE_WEBHOOK_URL`: optional old website webhook URL. IMB callback yahan forward ho jayega.
+- `EXISTING_WEBSITE_WEBHOOK_URL`: old website webhook URL. Default code me old website forward URL set hai.
 - `WEBHOOK_FORWARD_STRICT`: `true` karne par old website forward fail hua to IMB ko error return hoga.
-- `PUBLIC_BASE_URL`: ngrok/cloudflared/public domain, for example `https://abc.ngrok-free.app`.
+- `PUBLIC_BASE_URL`: Render URL, example `https://prime-purchase.onrender.com`.
 
-Share Google Sheet with service account email as `Editor`.
+## IMB webhook
 
-## Run
-
-```powershell
-python bot.py
-```
-
-## Cloud Hosting
-
-PC off rakhna hai to bot ko Render/Railway/VPS jaise cloud host par run karein. Cloudflare Tunnel local PC ko expose karta hai, isliye PC off hote hi tunnel band ho jayega. Cloudflare ko domain/DNS ke liye use kar sakte hain.
-
-Render/Railway env variables me local `.env` ki values add karein. `service_account.json` file upload karne ke bajay `GOOGLE_SERVICE_ACCOUNT_JSON` me JSON ka full content paste kar sakte hain.
-
-Local webhook URL:
+IMB dashboard me callback/webhook URL:
 
 ```text
-http://localhost:8080/imb/webhook
+https://prime-purchase.onrender.com/imb/webhook
 ```
 
-IMB dashboard me webhook/callback URL set karein:
-
-```text
-https://your-public-url.example.com/imb/webhook
-```
-
-Same IMB webhook ko existing website ke saath bhi chalana ho to IMB dashboard me sirf bot ka URL rakhein. Bot callback receive karke `EXISTING_WEBSITE_WEBHOOK_URL` par same payload forward kar dega.
-
-IMB docs ke according Create Order API payment URL, Paytm link, PhonePe link aur BHIM/UPI link return karta hai: https://developer.imb.org.in/Docs/index
-
-## Bot commands
-
-```text
-/start
-/products
-/buy PRODUCT_ID
-/orders
-/sync
-```
-
-`/sync` sirf admin ke liye hai. Ye sheet headers check/create karta hai.
+Bot same callback ko existing website webhook par forward bhi karega.
