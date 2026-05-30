@@ -208,14 +208,40 @@ def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: i
     if first_row[: len(headers)] != headers:
         worksheet.batch_clear([f"A1:{column_letter(max(worksheet.col_count, len(headers)))}1"])
         worksheet.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
-    worksheet.format(f"A1:{column_letter(len(headers))}1", header_format_for(title))
-    worksheet.format(
-        f"A:{column_letter(len(headers))}",
-        {
-            "horizontalAlignment": "CENTER",
-            "verticalAlignment": "MIDDLE",
-            "wrapStrategy": "WRAP",
-        },
+    worksheet.batch_format(
+        [
+            {
+                "range": f"A1:{column_letter(max(worksheet.col_count, len(headers)))}{max(worksheet.row_count, rows)}",
+                "format": {
+                    "backgroundColor": {"red": 0.976, "green": 0.980, "blue": 0.984},
+                    "textFormat": {
+                        "fontSize": 11,
+                        "foregroundColor": {"red": 0.067, "green": 0.094, "blue": 0.153},
+                    },
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP",
+                },
+            },
+            {
+                "range": f"A1:{column_letter(len(headers))}1",
+                "format": {
+                    "backgroundColor": {"red": 0.133, "green": 0.773, "blue": 0.369},
+                    "textFormat": {
+                        "bold": True,
+                        "fontSize": 12,
+                        "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                    },
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP",
+                },
+            },
+            {
+                "range": f"A3:{column_letter(len(headers))}{max(worksheet.row_count, rows)}",
+                "format": {"backgroundColor": {"red": 0.925, "green": 0.992, "blue": 0.961}},
+            },
+        ]
     )
     worksheet.freeze(rows=1)
     return worksheet
@@ -358,14 +384,23 @@ def remember_customer_from_payload(payload: dict) -> None:
 
 
 def active_customer_ids() -> list[int]:
-    ids = []
+    ids = set()
     for row in row_dicts(customers_worksheet()):
         if str(row.get("blocked", "")).strip().lower() in {"yes", "true", "1", "blocked"}:
             continue
         raw_id = str(row.get("telegram_user_id", "")).strip()
         if raw_id.isdigit():
-            ids.append(int(raw_id))
-    return sorted(set(ids))
+            ids.add(int(raw_id))
+
+    try:
+        _, _, _, orders_ws = ensure_sheet_schema()
+        for row in row_dicts(orders_ws):
+            raw_id = str(row.get("telegram_user_id", "")).strip()
+            if raw_id.isdigit():
+                ids.add(int(raw_id))
+    except Exception as exc:
+        print(f"Order customer fallback failed: {exc}")
+    return sorted(ids)
 
 
 def dashboard_config_rows(dashboard) -> list[list[str]]:
@@ -523,10 +558,17 @@ def available_inventory_rows(worksheet) -> list[tuple[int, dict[str, str]]]:
     for row_num, row in enumerate(rows, start=2):
         mail_id = str(row.get("mail_id", "")).strip()
         purchase_date = str(row.get("purchase_date", "")).strip()
-        order_id = str(row.get("order_id", "")).strip()
-        if mail_id and not purchase_date and not order_id:
+        if mail_id and not purchase_date:
             available.append((row_num, row))
     return available
+
+
+def find_inventory_by_order(worksheet, order_id: str) -> list[tuple[int, dict[str, str]]]:
+    matched = []
+    for row_num, row in enumerate(row_dicts(worksheet), start=2):
+        if str(row.get("order_id", "")).strip() == order_id:
+            matched.append((row_num, row))
+    return matched
 
 
 def get_plan_info(plan_id: str) -> PlanInfo:
@@ -567,55 +609,29 @@ def clear_plan_cache() -> None:
 
 
 def reserve_inventory(plan_id: str, quantity: int, order_id: str, user) -> list[dict[str, str]]:
-    worksheet = inventory_for_plan(plan_id)
-    available = available_inventory_rows(worksheet)
-    if len(available) < quantity:
-        raise RuntimeError("Stock kam hai.")
-
-    reserved = []
-    batch_updates = []
-    for row_num, row in available[:quantity]:
-        batch_updates.extend(
-            [
-                {"range": f"D{row_num}", "values": [[user.username or ""]]},
-                {"range": f"E{row_num}", "values": [[str(user.id)]]},
-                {"range": f"F{row_num}", "values": [[order_id]]},
-            ]
-        )
-        reserved.append(row)
-    worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
-    clear_plan_cache()
-    return reserved
+    return []
 
 
 def release_reserved_inventory(plan_id: str, order_id: str) -> None:
+    return None
+
+
+def mark_reserved_sold(plan_id: str, order_id: str, quantity: int = 1, username: str = "", telegram_user_id: str = "") -> list[dict[str, str]]:
     worksheet = inventory_for_plan(plan_id)
+    already_allocated = find_inventory_by_order(worksheet, order_id)
+    selected_rows = already_allocated or available_inventory_rows(worksheet)[:quantity]
+    if len(selected_rows) < quantity and not already_allocated:
+        raise RuntimeError("Paid order ke liye stock available nahi hai.")
+
     batch_updates = []
-    for row_num, row in enumerate(row_dicts(worksheet), start=2):
-        if str(row.get("order_id", "")).strip() != order_id:
-            continue
-        if str(row.get("purchase_date", "")).strip():
-            continue
-        batch_updates.extend(
-            [
-                {"range": f"D{row_num}:F{row_num}", "values": [["", "", ""]]},
-            ]
-        )
-    if batch_updates:
-        worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
-        clear_plan_cache()
-
-
-def mark_reserved_sold(plan_id: str, order_id: str) -> list[dict[str, str]]:
-    worksheet = inventory_for_plan(plan_id)
     delivered = []
-    batch_updates = []
-    for row_num, row in enumerate(row_dicts(worksheet), start=2):
-        if str(row.get("order_id", "")).strip() != order_id:
-            continue
+    for row_num, row in selected_rows[:quantity]:
         batch_updates.extend(
             [
                 {"range": f"C{row_num}", "values": [[now_iso()]]},
+                {"range": f"D{row_num}", "values": [[username]]},
+                {"range": f"E{row_num}", "values": [[str(telegram_user_id)]]},
+                {"range": f"F{row_num}", "values": [[order_id]]},
             ]
         )
         delivered.append(row)
@@ -655,10 +671,10 @@ def append_order(update: Update, plan: PlanInfo, quantity: int, reserved_items: 
 
 def create_order_with_inventory(update: Update, plan: PlanInfo, quantity: int) -> tuple[str, list[dict[str, str]]]:
     order_id = "ord_" + uuid.uuid4().hex[:12]
-    reserved_items = reserve_inventory(plan.plan_id, quantity, order_id, update.effective_user)
+    reserved_items: list[dict[str, str]] = []
     _, _, _, orders_ws = ensure_sheet_schema()
     user = update.effective_user
-    item_ids = ", ".join(str(item.get("mail_id", "")).strip() for item in reserved_items)
+    remember_customer_async(user)
     orders_ws.append_row(
         [
             order_id,
@@ -671,7 +687,7 @@ def create_order_with_inventory(update: Update, plan: PlanInfo, quantity: int) -
             "pending",
             "",
             "",
-            item_ids,
+            "",
             "",
             now_iso(),
             "",
@@ -747,7 +763,28 @@ def fulfill_paid_order(order_id: str, gateway_txn_id: str = "") -> bool:
     if str(order.get("status", "")).strip().lower() == "paid":
         return True
 
-    delivered_items = mark_reserved_sold(str(order.get("plan_id", "")), order_id)
+    try:
+        quantity = int(float(str(order.get("quantity", "1")).strip()))
+    except ValueError:
+        quantity = 1
+    telegram_user_id_raw = str(order.get("telegram_user_id", "")).strip()
+    try:
+        delivered_items = mark_reserved_sold(
+            str(order.get("plan_id", "")),
+            order_id,
+            quantity,
+            str(order.get("username", "")).strip(),
+            telegram_user_id_raw,
+        )
+    except RuntimeError as exc:
+        if telegram_user_id_raw.isdigit():
+            send_delivery_message(
+                int(telegram_user_id_raw),
+                "<b>⚠️ Payment received, lekin stock abhi available nahi hai. Admin aapko shortly contact karega.</b>",
+            )
+        print(f"Fulfilment failed for {order_id}: {exc}")
+        return False
+
     telegram_user_id = update_order_paid(order_id, delivered_items, gateway_txn_id)
     if telegram_user_id:
         send_delivery_message(telegram_user_id, format_delivery_message(order, delivered_items))
