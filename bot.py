@@ -197,6 +197,14 @@ def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: i
         worksheet.batch_clear([f"A1:{column_letter(max(worksheet.col_count, len(headers)))}1"])
         worksheet.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
     worksheet.format(f"A1:{column_letter(len(headers))}1", header_format_for(title))
+    worksheet.format(
+        f"A:{column_letter(len(headers))}",
+        {
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        },
+    )
     worksheet.freeze(rows=1)
     return worksheet
 
