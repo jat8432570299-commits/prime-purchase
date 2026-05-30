@@ -251,6 +251,30 @@ def remember_customer(user) -> None:
     worksheet.update_cell(cell.row, 5, timestamp)
 
 
+def remember_customer_async(user) -> None:
+    if not user:
+        return
+
+    snapshot = {
+        "id": getattr(user, "id", ""),
+        "username": getattr(user, "username", "") or "",
+        "first_name": getattr(user, "first_name", "") or "",
+    }
+
+    class UserSnapshot:
+        id = snapshot["id"]
+        username = snapshot["username"]
+        first_name = snapshot["first_name"]
+
+    def worker() -> None:
+        try:
+            remember_customer(UserSnapshot)
+        except Exception as exc:
+            print(f"Customer save failed: {exc}")
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def active_customer_ids() -> list[int]:
     ids = []
     for row in row_dicts(customers_worksheet()):
@@ -732,7 +756,7 @@ def plans_message() -> str:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    remember_customer(update.effective_user)
+    remember_customer_async(update.effective_user)
     await update.message.reply_text(
         welcome_message(),
         parse_mode=ParseMode.HTML,
@@ -741,7 +765,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    remember_customer(update.effective_user)
+    remember_customer_async(update.effective_user)
     await update.message.reply_text(
         plans_message(),
         parse_mode=ParseMode.HTML,
@@ -750,7 +774,7 @@ async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    remember_customer(update.effective_user)
+    remember_customer_async(update.effective_user)
     if len(context.args) < 2:
         await update.message.reply_text("<b>🧾 Format: /buy 1m 2 ya /buy 6m 1</b>", parse_mode=ParseMode.HTML)
         return
@@ -831,7 +855,7 @@ async def create_order_and_send_payment(update: Update, plan_id: str, quantity: 
 
 
 async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    remember_customer(update.effective_user)
+    remember_customer_async(update.effective_user)
     orders = list_user_orders(update.effective_user.id)
     if not orders:
         await update.message.reply_text("<b>📭 Aapka koi order abhi Sheet me nahi mila.</b>", parse_mode=ParseMode.HTML)
@@ -913,7 +937,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
     data = query.data or ""
-    remember_customer(query.from_user)
+    remember_customer_async(query.from_user)
 
     if data == "back:plans":
         await query.edit_message_text(welcome_message(), parse_mode=ParseMode.HTML, reply_markup=plans_keyboard())
