@@ -830,7 +830,134 @@ def health():
 
 @flask_app.get("/payment/thanks")
 def payment_thanks():
-    return "Payment response received. Telegram par confirmation check karein."
+    order_id = request.args.get("order_id", "").strip()
+    safe_order = order_id if order_id else "Processing"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payment Received</title>
+  <style>
+    * {{
+      box-sizing: border-box;
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f6f8fb;
+      color: #16202a;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }}
+    .page {{
+      width: 100%;
+      max-width: 520px;
+      background: #ffffff;
+      border: 1px solid #e1e7ef;
+      border-radius: 18px;
+      padding: 28px 22px;
+      text-align: center;
+      box-shadow: 0 16px 45px rgba(21, 33, 48, 0.12);
+    }}
+    .icon {{
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 18px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #e9f9ef;
+      color: #157347;
+      font-size: 38px;
+      line-height: 1;
+    }}
+    h1 {{
+      margin: 0 0 10px;
+      font-size: 28px;
+      line-height: 1.2;
+    }}
+    p {{
+      margin: 10px 0;
+      font-size: 16px;
+      line-height: 1.55;
+      color: #435064;
+    }}
+    .order {{
+      margin: 18px 0;
+      padding: 12px;
+      border-radius: 12px;
+      background: #f1f5f9;
+      font-size: 14px;
+      color: #283548;
+      word-break: break-word;
+    }}
+    .steps {{
+      text-align: left;
+      margin: 20px 0 22px;
+      padding: 0;
+      list-style: none;
+    }}
+    .steps li {{
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 10px 0;
+      border-top: 1px solid #edf1f6;
+      color: #2f3b4d;
+      line-height: 1.45;
+    }}
+    .steps li:first-child {{
+      border-top: 0;
+    }}
+    .btn {{
+      display: block;
+      width: 100%;
+      text-decoration: none;
+      border-radius: 12px;
+      padding: 15px 16px;
+      background: #2481cc;
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 16px;
+    }}
+    .note {{
+      margin-top: 14px;
+      font-size: 13px;
+      color: #687586;
+    }}
+    @media (max-width: 420px) {{
+      .page {{
+        padding: 24px 16px;
+        border-radius: 16px;
+      }}
+      h1 {{
+        font-size: 24px;
+      }}
+      p, .btn {{
+        font-size: 15px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="icon">✅</div>
+    <h1>Thank You! 🎉</h1>
+    <p>Payment receive ho gaya hai. Aapki ID / pass / inventory details Telegram bot me automatically mil jayengi.</p>
+    <div class="order">🧾 Order ID: <strong>{safe_order}</strong></div>
+    <ul class="steps">
+      <li><span>🔍</span><span>Bot payment verify karega.</span></li>
+      <li><span>📦</span><span>Available inventory item reserve se sold mark hoga.</span></li>
+      <li><span>🤖</span><span>Details aapke Telegram chat me send ho jayengi.</span></li>
+    </ul>
+    <a class="btn" href="https://t.me/Santhot8432_bot">Open Telegram Bot 🚀</a>
+    <p class="note">Agar message turant na aaye, Telegram bot me /orders check karein.</p>
+  </main>
+</body>
+</html>"""
 
 
 @flask_app.post("/imb/webhook")
