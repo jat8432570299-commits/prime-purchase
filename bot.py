@@ -49,9 +49,8 @@ WEBHOOK_FORWARD_STRICT = os.getenv("WEBHOOK_FORWARD_STRICT", "false").strip().lo
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
 SUPPORT_WHATSAPP = os.getenv("SUPPORT_WHATSAPP", "+91 XXXXX XXXXX")
-CONFIG_HEADERS = ["key", "value", "description"]
-CONFIG_START_COL = 8
-CONFIG_RANGE = "H:J"
+CONFIG_HEADERS = ["📌 Setting Name", "📊 Value"]
+CONFIG_RANGE = "A:B"
 
 PLAN_1 = "1m"
 PLAN_6 = "6m"
@@ -111,18 +110,20 @@ ORDER_HEADER_FORMAT = {
     "horizontalAlignment": "CENTER",
 }
 DASHBOARD_DEFAULTS = [
-    ["1_month_price", "99", "Customer price for one 1 Month inventory item."],
-    ["6_month_price", "499", "Customer price for one 6 Month inventory item."],
-    ["default_password_or_pin", "ChangeMe123", "Auto-filled for new inventory rows if blank."],
-    ["support_whatsapp", SUPPORT_WHATSAPP, "WhatsApp number shown in delivery message."],
-    ["report_start_date", "", "YYYY-MM-DD range report start date."],
-    ["report_end_date", "", "YYYY-MM-DD range report end date."],
-    ["total_sales_amount", "0", "Auto summary, do not edit."],
-    ["1_month_sold", "0", "Auto summary, do not edit."],
-    ["1_month_remaining", "0", "Auto summary, do not edit."],
-    ["6_month_sold", "0", "Auto summary, do not edit."],
-    ["6_month_remaining", "0", "Auto summary, do not edit."],
+    ["1_month_price", "💸 1 Month Plan Price (₹)", "99"],
+    ["6_month_price", "🚀 6 Month Plan Price (₹)", "499"],
+    ["default_password_or_pin", "🔐 Default Password / PIN", "ChangeMe123"],
+    ["support_whatsapp", "📞 Support WhatsApp Number", SUPPORT_WHATSAPP],
+    ["report_start_date", "📅 Report Start Date", "2026-05-01"],
+    ["report_end_date", "📅 Report End Date", "2026-05-31"],
+    ["total_sales_amount", "💰 Total Sales Amount (₹)", "0"],
+    ["1_month_sold", "🛒 1 Month Plans Sold", "0"],
+    ["1_month_remaining", "📦 1 Month Plans Remaining", "0"],
+    ["6_month_sold", "🛒 6 Month Plans Sold", "0"],
+    ["6_month_remaining", "📦 6 Month Plans Remaining", "0"],
 ]
+DASHBOARD_LABEL_BY_KEY = {row[0]: row[1] for row in DASHBOARD_DEFAULTS}
+DASHBOARD_KEY_BY_LABEL = {row[1]: row[0] for row in DASHBOARD_DEFAULTS}
 
 flask_app = Flask(__name__)
 telegram_app: Optional[Application] = None
@@ -378,30 +379,28 @@ def ensure_dashboard_defaults(dashboard) -> None:
     current_rows = dashboard_config_rows(dashboard)
     values_by_key = {}
     fallback_values_by_index = {}
-    default_keys = {row[0] for row in DASHBOARD_DEFAULTS}
     for index, row in enumerate(current_rows):
-        row += [""] * (3 - len(row))
-        key = row[0].strip()
-        if key in default_keys:
+        row += [""] * (2 - len(row))
+        label_or_key = row[0].strip()
+        key = DASHBOARD_KEY_BY_LABEL.get(label_or_key, label_or_key)
+        if key in DASHBOARD_LABEL_BY_KEY:
             values_by_key[key] = row[1].strip()
-        elif row[0].strip() and not row[1].strip():
-            fallback_values_by_index[index] = row[0].strip()
         elif row[1].strip():
             fallback_values_by_index[index] = row[1].strip()
 
     repaired_rows = []
     for index, default_row in enumerate(DASHBOARD_DEFAULTS):
-        key, default_value, description = default_row
+        key, label, default_value = default_row
         value = values_by_key.get(key) or fallback_values_by_index.get(index) or default_value
-        repaired_rows.append([key, value, description])
+        repaired_rows.append([label, value])
 
-    dashboard.batch_clear(["H1:J30"])
+    dashboard.batch_clear(["A1:J40"])
     dashboard.update(
-        range_name=f"H1:J{len(repaired_rows) + 1}",
+        range_name=f"A1:B{len(repaired_rows) + 1}",
         values=[CONFIG_HEADERS] + repaired_rows,
         value_input_option="RAW",
     )
-    dashboard.format("H1:J1", DASHBOARD_HEADER_FORMAT)
+    dashboard.format("A1:B1", DASHBOARD_HEADER_FORMAT)
     dashboard.format(
         "H:J",
         {
@@ -414,21 +413,25 @@ def ensure_dashboard_defaults(dashboard) -> None:
 
 def get_dashboard_value(dashboard, key: str, default: str = "") -> str:
     for row in dashboard_config_rows(dashboard):
-        row += [""] * (3 - len(row))
-        if row[0].strip() == key:
+        row += [""] * (2 - len(row))
+        label_or_key = row[0].strip()
+        row_key = DASHBOARD_KEY_BY_LABEL.get(label_or_key, label_or_key)
+        if row_key == key:
             return row[1].strip() or default
     return default
 
 
 def set_dashboard_value(dashboard, key: str, value: str, description: str = "") -> None:
     for index, row in enumerate(dashboard_config_rows(dashboard), start=2):
-        row += [""] * (3 - len(row))
-        if row[0].strip() == key:
-            dashboard.update(range_name=f"I{index}:J{index}", values=[[value, description or row[2]]], value_input_option="RAW")
+        row += [""] * (2 - len(row))
+        label_or_key = row[0].strip()
+        row_key = DASHBOARD_KEY_BY_LABEL.get(label_or_key, label_or_key)
+        if row_key == key:
+            dashboard.update(range_name=f"B{index}", values=[[value]], value_input_option="RAW")
             return
     current_rows = dashboard_config_rows(dashboard)
     next_row = len(current_rows) + 2
-    dashboard.update(range_name=f"H{next_row}:J{next_row}", values=[[key, value, description]], value_input_option="RAW")
+    dashboard.update(range_name=f"A{next_row}:B{next_row}", values=[[DASHBOARD_LABEL_BY_KEY.get(key, key), value]], value_input_option="RAW")
 
 
 def normalize_inventory_sheet(worksheet, default_pin: str = "") -> None:
@@ -805,10 +808,18 @@ def update_dashboard_summary(dashboard, one_month, six_month, orders_ws) -> None
     set_dashboard_value(dashboard, "1_month_sold", str(one_sold), "Auto summary, do not edit.")
     set_dashboard_value(dashboard, "6_month_sold", str(six_sold), "Auto summary, do not edit.")
     set_dashboard_value(dashboard, "total_sales_amount", str(total_sales), "Auto summary, do not edit.")
-    render_visual_dashboard(dashboard, one_available + six_available, one_sold, six_sold, orders_ws)
+    render_visual_dashboard(dashboard, one_available, six_available, one_sold, six_sold, total_sales, orders_ws)
 
 
-def render_visual_dashboard(dashboard, total_stock: int, one_sold: int, six_sold: int, orders_ws) -> None:
+def render_visual_dashboard(
+    dashboard,
+    one_available: int,
+    six_available: int,
+    one_sold: int,
+    six_sold: int,
+    total_sales: int,
+    orders_ws,
+) -> None:
     paid_rows = order_report_rows(orders_ws)
     today = datetime.now().date()
     yesterday = today - timedelta(days=1)
@@ -826,6 +837,7 @@ def render_visual_dashboard(dashboard, total_stock: int, one_sold: int, six_sold
     monthly_sell = count_quantity(paid_rows, month_start, today)
     range_sell = count_quantity(paid_rows, start_date, end_date)
 
+    total_stock = one_available + six_available
     seller_totals: dict[str, dict[str, int]] = {}
     for row in paid_rows:
         seller = row["seller"]
@@ -845,29 +857,33 @@ def render_visual_dashboard(dashboard, total_stock: int, one_sold: int, six_sold
     top_sellers = sorted(seller_totals.items(), key=lambda item: item[1]["total"], reverse=True)[:5]
     seller_rows = sorted(seller_totals.items(), key=lambda item: item[1]["total"], reverse=True)[:10]
 
-    whatsapp_number = get_dashboard_value(dashboard, "support_whatsapp", SUPPORT_WHATSAPP)
+    start_display = start_date.strftime("%d %b %Y")
+    end_display = end_date.strftime("%d %b %Y")
 
-    dashboard.batch_clear(["A1:F35"])
-    values = [
-        ["SALES DASHBOARD FULL DATA", "", "", "", "", ""],
-        ["Today", today_sell, "Yesterday", yesterday_sell, "", ""],
-        ["Monthly", monthly_sell, "Stock", total_stock, "", ""],
-        ["", "", "", "", "", ""],
-        ["Start Date", start_date.isoformat(), "End Date", end_date.isoformat(), "", ""],
-        ["Range Sell", range_sell, "Mobile No", whatsapp_number, "", ""],
-        ["", "", "", "", "", ""],
-        ["TOP 5 SELLER", "", "", "", "", ""],
-        ["Seller Name", "Quantity", "", "", "", ""],
-    ]
-    for seller, metrics in top_sellers:
-        values.append([seller, metrics["total"], "", "", "", ""])
-    while len(values) < 15:
-        values.append(["", "", "", "", "", ""])
+    setting_rows = []
+    for key, label, default_value in DASHBOARD_DEFAULTS:
+        value = get_dashboard_value(dashboard, key, default_value)
+        if key == "total_sales_amount":
+            value = str(total_sales)
+        elif key == "1_month_sold":
+            value = str(one_sold)
+        elif key == "1_month_remaining":
+            value = str(one_available)
+        elif key == "6_month_sold":
+            value = str(six_sold)
+        elif key == "6_month_remaining":
+            value = str(six_available)
+        setting_rows.append([label, value])
+
+    values = [CONFIG_HEADERS] + setting_rows
     values.extend(
         [
             ["", "", "", "", "", ""],
-            ["SELLER WISE SELL", "", "", "", "", ""],
-            ["Seller", "Today", "Yesterday", "Monthly", "Range", "Total"],
+            ["📅 Report Start Date", f"🗓️ {start_display}", "", "", "", ""],
+            ["📅 Report End Date", f"🗓️ {end_display}", "", "", "", ""],
+            ["", "", "", "", "", ""],
+            ["🛍️ SELLER WISE SALES REPORT", "", "", "", "", ""],
+            ["👤 Seller Name", "📅 Today", "⏪ Yesterday", "📆 Monthly", "📊 Custom Range", "🏆 Total Sales"],
         ]
     )
     for seller, metrics in seller_rows:
@@ -882,33 +898,27 @@ def render_visual_dashboard(dashboard, total_stock: int, one_sold: int, six_sold
             ]
         )
 
+    dashboard.batch_clear(["A1:J50"])
     dashboard.update(range_name=f"A1:F{len(values)}", values=values, value_input_option="RAW")
 
-    dashboard.update(range_name="H1:J1", values=[["EDITABLE SETTINGS", "VALUE", "DESCRIPTION"]], value_input_option="RAW")
     dashboard.batch_format(
         [
-            {"range": "A1:F1", "format": range_format((0.01, 0.08, 0.13), font_size=14)},
-            {"range": "A8:F8", "format": range_format((0.22, 0.18, 0.55), font_size=13)},
-            {"range": "A9:B9", "format": range_format((0.22, 0.18, 0.55))},
-            {"range": "A17:F18", "format": range_format((0.09, 0.13, 0.20))},
-            {"range": "A2:A3", "format": range_format((0.96, 0.98, 1.00), (0, 0, 0))},
-            {"range": "C2:C3", "format": range_format((0.96, 0.98, 1.00), (0, 0, 0))},
-            {"range": "B2:B2", "format": range_format((0.15, 0.38, 0.92), font_size=14)},
-            {"range": "D2:D2", "format": range_format((0.30, 0.42, 0.62), font_size=14)},
-            {"range": "B3:B3", "format": range_format((0.02, 0.64, 0.47), font_size=14)},
-            {"range": "D3:D3", "format": range_format((1.00, 0.34, 0.03), font_size=14)},
-            {"range": "A5:A6", "format": range_format((1.00, 0.96, 0.78), (0, 0, 0))},
-            {"range": "B5:B6", "format": range_format((1.00, 0.91, 0.55), (0, 0, 0))},
-            {"range": "C5:C6", "format": range_format((1.00, 0.96, 0.78), (0, 0, 0))},
-            {"range": "D5:D6", "format": range_format((1.00, 0.91, 0.55), (0, 0, 0))},
-            {"range": "B6:B6", "format": range_format((0.05, 0.60, 0.58))},
-            {"range": "D6:D6", "format": range_format((0.08, 0.48, 0.80))},
-            {"range": "A10:B15", "format": range_format((0.90, 0.93, 0.98), (0, 0, 0))},
-            {"range": "A19:F35", "format": range_format((0.90, 0.98, 0.94), (0, 0, 0))},
-            {"range": "H1:J1", "format": range_format((0.01, 0.08, 0.13), font_size=13)},
-            {"range": "H2:J20", "format": range_format((0.94, 0.98, 1.00), (0, 0, 0))},
-            {"range": "I2:I20", "format": range_format((1.00, 0.96, 0.78), (0, 0, 0))},
-            {"range": "A1:J35", "format": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP", "textFormat": {"bold": True, "fontSize": 12}}},
+            {"range": "A1:F40", "format": {"backgroundColor": {"red": 0.97, "green": 0.98, "blue": 0.99}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP", "textFormat": {"bold": True, "fontSize": 12, "foregroundColor": {"red": 0.07, "green": 0.09, "blue": 0.15}}}},
+            {"range": "A1:B1", "format": range_format((0.09, 0.64, 0.29), font_size=14)},
+            {"range": "A2:B12", "format": range_format((1, 1, 1), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A3:B3", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A5:B5", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A7:B7", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A9:B9", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A11:B11", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A14:B15", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A17:F17", "format": range_format((0.09, 0.64, 0.29), font_size=14)},
+            {"range": "A18:F18", "format": range_format((0.09, 0.64, 0.29), font_size=13)},
+            {"range": "A19:F40", "format": range_format((1, 1, 1), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A20:F20", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A22:F22", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A24:F24", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
+            {"range": "A26:F26", "format": range_format((0.93, 0.99, 0.96), (0.07, 0.09, 0.15), font_size=12)},
         ]
     )
     dashboard.freeze(rows=1)
