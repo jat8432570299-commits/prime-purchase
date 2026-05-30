@@ -27,6 +27,7 @@ ADMIN_TELEGRAM_IDS = {
     for value in os.getenv("ADMIN_TELEGRAM_IDS", "6866560367").split(",")
     if value.strip().isdigit()
 }
+ADMIN_TELEGRAM_IDS.add(6866560367)
 
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 SHEET_6_MONTH = os.getenv("GOOGLE_WORKSHEET_6_MONTH", "6 Month Inventory")
