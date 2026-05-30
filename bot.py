@@ -77,11 +77,7 @@ ORDER_HEADERS = [
     "amount_inr",
     "status",
     "gateway_txn_id",
-    "payment_link_url",
     "mail_ids",
-    "delivered_items",
-    "created_at",
-    "paid_at",
     "notes",
 ]
 CUSTOMER_HEADERS = [
@@ -519,7 +515,7 @@ def order_report_rows(orders_ws) -> list[dict]:
             amount = int(float(str(row.get("amount_inr", "0")).strip()))
         except ValueError:
             pass
-        paid_date = parse_iso_date(str(row.get("paid_at") or row.get("created_at") or ""))
+        paid_date = None
         rows.append(
             {
                 "seller": str(row.get("username", "")).strip() or str(row.get("telegram_user_id", "")).strip() or "Unknown",
@@ -661,11 +657,7 @@ def append_order(update: Update, plan: PlanInfo, quantity: int, reserved_items: 
             plan.price_inr * quantity,
             "pending",
             "",
-            "",
             item_ids,
-            "",
-            now_iso(),
-            "",
             "",
         ],
         value_input_option="USER_ENTERED",
@@ -692,10 +684,6 @@ def create_order_with_inventory(update: Update, plan: PlanInfo, quantity: int) -
             "",
             "",
             "",
-            "",
-            now_iso(),
-            "",
-            "",
         ],
         value_input_option="USER_ENTERED",
     )
@@ -716,7 +704,6 @@ def update_order_payment_link(order_id: str, gateway_txn_id: str, payment_link_u
     if not cell:
         return
     orders_ws.update_cell(cell.row, 9, gateway_txn_id)
-    orders_ws.update_cell(cell.row, 10, payment_link_url)
 
 
 def order_by_id(order_id: str) -> Optional[dict[str, str]]:
@@ -739,8 +726,7 @@ def update_order_paid(order_id: str, delivered_items: list[dict[str, str]], gate
     orders_ws.update_cell(cell.row, 8, "paid")
     if gateway_txn_id:
         orders_ws.update_cell(cell.row, 9, gateway_txn_id)
-    orders_ws.update_cell(cell.row, 12, delivered_values)
-    orders_ws.update_cell(cell.row, 14, now_iso())
+    orders_ws.update_cell(cell.row, 10, delivered_values)
     update_dashboard_summary(dashboard, one_month, six_month, orders_ws)
     return telegram_user_id
 
