@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import html
 import json
 import os
@@ -8,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote, unquote
 
 import gspread
 import requests
@@ -803,7 +805,12 @@ def order_confirmation_message(
 
 
 def payment_button_url(payment_data: dict[str, str], payment_link_url: str) -> str:
-    for key in ("paytm_link", "paytmLink", "payment_url", "paymentUrl", "payment_link", "paymentLink"):
+    paytm_link = str(payment_data.get("paytm_link") or payment_data.get("paytmLink") or "").strip()
+    if paytm_link.startswith("paytmmp://") and PUBLIC_BASE_URL:
+        encoded = base64.urlsafe_b64encode(paytm_link.encode("utf-8")).decode("ascii")
+        return f"{PUBLIC_BASE_URL}/paytm/redirect?u={quote(encoded)}&fallback={quote(payment_link_url)}"
+
+    for key in ("payment_url", "paymentUrl", "payment_link", "paymentLink"):
         value = str(payment_data.get(key) or "").strip()
         if value.startswith(("https://", "http://")):
             return value
@@ -1263,6 +1270,83 @@ def payment_thanks():
     </ul>
     <a class="btn" href="https://t.me/Santhot8432_bot">Open Telegram Bot 🚀</a>
     <p class="note">⚠️ Agar message turant na aaye, Telegram bot me /orders check karein.</p>
+  </main>
+</body>
+</html>"""
+
+
+@flask_app.get("/paytm/redirect")
+def paytm_redirect():
+    encoded_url = request.args.get("u", "").strip()
+    fallback_url = unquote(request.args.get("fallback", "")).strip()
+    paytm_url = ""
+    if encoded_url:
+        try:
+            paytm_url = base64.urlsafe_b64decode(encoded_url.encode("ascii")).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            paytm_url = ""
+    if not paytm_url.startswith("paytmmp://"):
+        paytm_url = fallback_url
+    if not fallback_url.startswith(("https://", "http://")):
+        fallback_url = PUBLIC_BASE_URL or "https://t.me/Santhot8432_bot"
+
+    safe_paytm = html.escape(paytm_url, quote=True)
+    safe_fallback = html.escape(fallback_url, quote=True)
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opening Paytm</title>
+  <meta http-equiv="refresh" content="1; url={safe_paytm}">
+  <style>
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f6f8fb;
+      color: #16202a;
+      text-align: center;
+      padding: 20px;
+      font-weight: 700;
+    }}
+    .box {{
+      max-width: 420px;
+      background: #fff;
+      border: 1px solid #e1e7ef;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 16px 45px rgba(21, 33, 48, 0.12);
+    }}
+    a {{
+      display: block;
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #002970;
+      color: #fff;
+      text-decoration: none;
+    }}
+    .fallback {{
+      background: #2481cc;
+    }}
+  </style>
+  <script>
+    window.location.href = "{safe_paytm}";
+    setTimeout(function () {{
+      var fallback = document.getElementById("fallback");
+      if (fallback) fallback.style.display = "block";
+    }}, 1500);
+  </script>
+</head>
+<body>
+  <main class="box">
+    <h1>💳 Opening Paytm...</h1>
+    <p>Paytm app open nahi ho to niche button use karein.</p>
+    <a href="{safe_paytm}">Open Paytm App</a>
+    <a id="fallback" class="fallback" href="{safe_fallback}" style="display:none">Open Payment Page</a>
   </main>
 </body>
 </html>"""
