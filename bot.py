@@ -133,7 +133,7 @@ worksheet_cache: dict[str, gspread.Worksheet] = {}
 schema_ready = False
 plan_cache = (0.0, [])
 PLAN_CACHE_SECONDS = 20
-RECONCILE_INTERVAL_SECONDS = 90
+RECONCILE_INTERVAL_SECONDS = 20
 
 
 @dataclass
@@ -780,7 +780,10 @@ def fulfill_paid_order(order_id: str, gateway_txn_id: str = "") -> bool:
         if telegram_user_id_raw.isdigit():
             send_delivery_message(
                 int(telegram_user_id_raw),
-                "<b>⚠️ Payment received, lekin stock abhi available nahi hai. Admin aapko shortly contact karega.</b>",
+                f"<b>⚠️ Payment received hai.</b>\n\n"
+                f"<b>🧾 Order ID: <code>{html.escape(order_id)}</code></b>\n"
+                "<b>📦 Abhi stock available nahi hai.</b>\n"
+                "<b>🙏 Admin se contact kijiye, aapka order shortly handle ho jayega.</b>",
             )
         print(f"Fulfilment failed for {order_id}: {exc}")
         return False
@@ -1388,10 +1391,13 @@ def format_delivery_message(order: dict[str, str], delivered_items: list[dict[st
     purchase_date = datetime.now().strftime("%d/%m/%Y")
     default_pin = get_dashboard_value(worksheet_cache[DASHBOARD_SHEET], "default_password_or_pin", "ChangeMe123")
     whatsapp_number = get_dashboard_value(worksheet_cache[DASHBOARD_SHEET], "support_whatsapp", SUPPORT_WHATSAPP)
+    order_id = str(order.get("order_id", "")).strip()
     lines = [
         "📦 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 📦",
         "",
         "━━━━━━━━━━━━━━━",
+        "",
+        f"🧾 Order ID: {order_id}",
         "",
         f"🗓 Plan: {plan_name}",
         "",
@@ -1429,6 +1435,28 @@ def health():
 def payment_thanks():
     order_id = request.args.get("order_id", "").strip()
     safe_order = order_id if order_id else "Processing"
+    fulfilment_state = "processing"
+    if order_id:
+        try:
+            order = order_by_id(order_id)
+            if order and str(order.get("status", "")).strip().lower() == "paid":
+                fulfilment_state = "delivered"
+            else:
+                status_response = check_imb_order_status(order_id)
+                if is_imb_status_paid(status_response):
+                    result = status_response.get("result") or {}
+                    gateway_txn_id = str(result.get("utr") or result.get("orderId") or order_id).strip()
+                    fulfilment_state = "delivered" if fulfill_paid_order(order_id, gateway_txn_id) else "out_of_stock"
+        except Exception as exc:
+            print(f"Thank-you fulfilment check failed for {order_id}: {exc}")
+    out_of_stock_script = ""
+    if fulfilment_state == "out_of_stock":
+        popup_message = (
+            "⚠️ अभी Stock Available Nahi Hai!\\n\\n"
+            f"🧾 Order ID: {safe_order}\\n"
+            "🙏 Admin se contact kijiye. Aapka payment receive ho gaya hai aur order shortly handle ho jayega."
+        )
+        out_of_stock_script = f"<script>alert({json.dumps(popup_message)});</script>"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1553,6 +1581,7 @@ def payment_thanks():
   </style>
 </head>
 <body>
+  {out_of_stock_script}
   <main class="page">
     <div class="icon">✅</div>
     <h1>Thank You! 🎉</h1>
