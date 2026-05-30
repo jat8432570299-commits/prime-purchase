@@ -47,6 +47,7 @@ EXISTING_WEBSITE_WEBHOOK_URL = os.getenv(
 WEBHOOK_FORWARD_STRICT = os.getenv("WEBHOOK_FORWARD_STRICT", "false").strip().lower() in {"1", "true", "yes", "y"}
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
+SUPPORT_WHATSAPP = os.getenv("SUPPORT_WHATSAPP", "+91 XXXXX XXXXX")
 
 PLAN_1 = "1m"
 PLAN_6 = "6m"
@@ -562,14 +563,14 @@ def update_order_paid(order_id: str, delivered_items: list[dict[str, str]], gate
 def send_delivery_message(telegram_user_id: int, message: str) -> None:
     if telegram_app and bot_loop:
         asyncio.run_coroutine_threadsafe(
-            telegram_app.bot.send_message(chat_id=telegram_user_id, text=message),
+            telegram_app.bot.send_message(chat_id=telegram_user_id, text=message, parse_mode=ParseMode.HTML),
             bot_loop,
         )
         return
 
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": telegram_user_id, "text": message},
+        json={"chat_id": telegram_user_id, "text": message, "parse_mode": "HTML"},
         timeout=30,
     ).raise_for_status()
 
@@ -755,6 +756,33 @@ def plans_message() -> str:
     return "\n".join(lines)
 
 
+def order_confirmation_message(
+    order_id: str,
+    plan: PlanInfo,
+    quantity: int,
+    payment_link_url: str,
+) -> str:
+    return (
+        "<b>🎉 𝗢𝗥𝗗𝗘𝗥 𝗖𝗢𝗡𝗙𝗜𝗥𝗠𝗘𝗗 🎉</b>\n\n"
+        "<b>━━━━━━━━━━━━━━━</b>\n"
+        "<b>🧾 Order Details</b>\n"
+        "<b>━━━━━━━━━━━━━━━</b>\n\n"
+        f"<b>🆔 Order ID: <code>{html.escape(order_id)}</code></b>\n"
+        f"<b>📦 Plan: {html.escape(plan.name)}</b>\n"
+        f"<b>🛒 Quantity: {quantity}</b>\n"
+        f"<b>💰 Total Amount: ₹{plan.price_inr * quantity} Only</b>\n\n"
+        "<b>━━━━━━━━━━━━━━━</b>\n"
+        "<b>💳 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘 𝗬𝗢𝗨𝗥 𝗣𝗔𝗬𝗠𝗘𝗡𝗧</b>\n"
+        "<b>━━━━━━━━━━━━━━━</b>\n\n"
+        f"<b>🔗 Payment Link:</b>\n{html.escape(payment_link_url)}\n\n"
+        "<b>━━━━━━━━━━━━━━━</b>\n"
+        "<b>⚡ 𝗔𝘂𝘁𝗼 𝗗𝗲𝗹𝗶𝘃𝗲𝗿𝘆 𝗘𝗻𝗮𝗯𝗹𝗲𝗱 ⚡</b>\n"
+        "<b>Payment successful hote hi aapke inventory items isi chat me automatically deliver ho jayenge ✅</b>\n"
+        "<b>━━━━━━━━━━━━━━━</b>\n\n"
+        "<b>🙏 Thanks for choosing Techsellpro 🚀</b>"
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     remember_customer_async(update.effective_user)
     await update.message.reply_text(
@@ -827,28 +855,8 @@ async def create_order_and_send_payment(update: Update, plan_id: str, quantity: 
         print(f"Payment response without link for {order_id}: {payment_data}")
         return
 
-    paytm_link = payment_data.get("paytm_link", "") or payment_data.get("paytmLink", "")
-    phonepe_link = payment_data.get("phonepe_link", "") or payment_data.get("phonepeLink", "")
-    bhim_link = payment_data.get("bhim_link", "") or payment_data.get("bhimLink", "")
-    app_links = "\n".join(
-        line
-        for line in [
-            f"<b>📲 Paytm:</b> {html.escape(paytm_link)}" if paytm_link else "",
-            f"<b>📲 PhonePe:</b> {html.escape(phonepe_link)}" if phonepe_link else "",
-            f"<b>🏦 BHIM/UPI:</b> {html.escape(bhim_link)}" if bhim_link else "",
-        ]
-        if line
-    )
-
     await update.effective_message.reply_text(
-        f"<b>✅ Order Ban Gaya!</b>\n\n"
-        f"<b>🧾 Order ID:</b> <code>{html.escape(order_id)}</code>\n"
-        f"<b>🛒 Plan:</b> {html.escape(plan.name)}\n"
-        f"<b>🔢 Quantity:</b> {quantity}\n"
-        f"<b>💰 Total:</b> Rs.{plan.price_inr * quantity}\n\n"
-        f"<b>🔗 Payment Link:</b>\n{html.escape(payment_link_url)}\n\n"
-        f"{app_links}\n\n"
-        "<b>✅ Payment successful hote hi inventory items yahin mil jayenge.</b>",
+        order_confirmation_message(order_id, plan, quantity, payment_link_url),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -976,14 +984,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 def format_delivery_message(order: dict[str, str], delivered_items: list[dict[str, str]]) -> str:
     plan_name = str(order.get("plan_name", "Plan"))
-    lines = [plan_name, ""]
-    pin = ""
+    purchase_date = datetime.now().strftime("%d/%m/%Y")
+    lines = [
+        "📦 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 📦",
+        "",
+        "━━━━━━━━━━━━━━━",
+        "",
+        f"🗓 Plan: {plan_name}",
+        "",
+        f"📅 Purchase Date: {purchase_date}",
+        "",
+    ]
+
     for index, item in enumerate(delivered_items, start=1):
-        lines.append(f"Item {index}: {str(item.get('item_value', '')).strip()}")
-        pin = pin or str(item.get("password_or_pin", "")).strip()
-    if pin:
-        lines.extend(["", f"PIN/Password: {pin}"])
-    return "\n".join(lines)
+        item_value = str(item.get("item_value", "")).strip()
+        pin = str(item.get("password_or_pin", "")).strip()
+        label = "📧 Mail ID" if len(delivered_items) == 1 else f"📧 Mail ID {index}"
+        lines.extend(
+            [
+                f"{label}: {item_value}",
+                "",
+                f"🔑 Password: {pin}",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            f"📱 WhatsApp Number: {SUPPORT_WHATSAPP}",
+        ]
+    )
+    return "\n".join(f"<b>{html.escape(line)}</b>" if line else "" for line in lines)
 
 
 @flask_app.get("/health")
@@ -1009,6 +1041,7 @@ def payment_thanks():
       margin: 0;
       min-height: 100vh;
       font-family: Arial, Helvetica, sans-serif;
+      font-weight: 700;
       background: #f6f8fb;
       color: #16202a;
       display: grid;
@@ -1088,8 +1121,20 @@ def payment_thanks():
     }}
     .note {{
       margin-top: 14px;
-      font-size: 13px;
-      color: #687586;
+      font-size: 14px;
+      color: #16202a;
+      background: #fff2bf;
+      border: 1px solid #f4d35e;
+      border-radius: 12px;
+      padding: 12px;
+    }}
+    .highlight {{
+      margin: 18px 0;
+      padding: 14px;
+      border-radius: 12px;
+      background: #e9f9ef;
+      border: 1px solid #9de4b6;
+      color: #0f5132;
     }}
     @media (max-width: 420px) {{
       .page {{
@@ -1109,15 +1154,15 @@ def payment_thanks():
   <main class="page">
     <div class="icon">✅</div>
     <h1>Thank You! 🎉</h1>
-    <p>Payment receive ho gaya hai. Aapki ID / pass / inventory details Telegram bot me automatically mil jayengi.</p>
-    <div class="order">🧾 Order ID: <strong>{safe_order}</strong></div>
+    <p>Payment receive ho gaya hai. Aapki ID / pass details Telegram bot me automatically mil jayengi.</p>
+    <div class="order">🧾 Order ID: <strong>{html.escape(safe_order)}</strong></div>
+    <div class="highlight">⏳ Credentials milne main 1-2 minutes ka time lag sakta hai.</div>
     <ul class="steps">
       <li><span>🔍</span><span>Bot payment verify karega.</span></li>
-      <li><span>📦</span><span>Available inventory item reserve se sold mark hoga.</span></li>
       <li><span>🤖</span><span>Details aapke Telegram chat me send ho jayengi.</span></li>
     </ul>
     <a class="btn" href="https://t.me/Santhot8432_bot">Open Telegram Bot 🚀</a>
-    <p class="note">Agar message turant na aaye, Telegram bot me /orders check karein.</p>
+    <p class="note">⚠️ Agar message turant na aaye, Telegram bot me /orders check karein.</p>
   </main>
 </body>
 </html>"""
