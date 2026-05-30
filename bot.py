@@ -729,8 +729,30 @@ def imb_webhook():
     return {"ok": True}
 
 
+@flask_app.post("/telegram/webhook")
+def telegram_webhook():
+    if not telegram_app or not bot_loop:
+        return {"ok": False, "error": "telegram app not ready"}, 503
+
+    payload = request.get_json(force=True, silent=True)
+    if not payload:
+        return {"ok": False, "error": "empty update"}, 400
+
+    update = Update.de_json(payload, telegram_app.bot)
+    future = asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), bot_loop)
+    future.result(timeout=30)
+    return {"ok": True}
+
+
 def run_flask() -> None:
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+
+
+def run_bot_loop() -> None:
+    if not bot_loop:
+        return
+    asyncio.set_event_loop(bot_loop)
+    bot_loop.run_forever()
 
 
 def build_app() -> Application:
@@ -752,9 +774,15 @@ def main() -> None:
 
     telegram_app = build_app()
     bot_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(bot_loop)
-    threading.Thread(target=run_flask, daemon=True).start()
-    telegram_app.run_polling(allowed_updates=Update.ALL_TYPES)
+    threading.Thread(target=run_bot_loop, daemon=True).start()
+    asyncio.run_coroutine_threadsafe(telegram_app.initialize(), bot_loop).result(timeout=60)
+    asyncio.run_coroutine_threadsafe(telegram_app.start(), bot_loop).result(timeout=60)
+    webhook_url = f"{PUBLIC_BASE_URL}/telegram/webhook"
+    asyncio.run_coroutine_threadsafe(
+        telegram_app.bot.set_webhook(webhook_url, allowed_updates=Update.ALL_TYPES),
+        bot_loop,
+    ).result(timeout=60)
+    run_flask()
 
 
 if __name__ == "__main__":
