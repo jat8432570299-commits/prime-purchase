@@ -13,7 +13,7 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, request
 from google.oauth2.service_account import Credentials
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
@@ -869,6 +869,19 @@ def main() -> None:
     webhook_url = f"{PUBLIC_BASE_URL}/telegram/webhook"
     asyncio.run_coroutine_threadsafe(
         telegram_app.bot.set_webhook(webhook_url, allowed_updates=Update.ALL_TYPES),
+        bot_loop,
+    ).result(timeout=60)
+    asyncio.run_coroutine_threadsafe(
+        telegram_app.bot.set_my_commands(
+            [
+                BotCommand("start", "Start inventory bot"),
+                BotCommand("products", "Show plans and stock"),
+                BotCommand("buy", "Buy: /buy 1m 1 or /buy 6m 1"),
+                BotCommand("orders", "Show your orders"),
+                BotCommand("dashboard", "Admin dashboard"),
+                BotCommand("sync", "Admin sheet sync"),
+            ]
+        ),
         bot_loop,
     ).result(timeout=60)
     run_flask()
