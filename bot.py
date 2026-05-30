@@ -102,6 +102,7 @@ worksheet_cache: dict[str, gspread.Worksheet] = {}
 schema_ready = False
 plan_cache = (0.0, [])
 PLAN_CACHE_SECONDS = 20
+RECONCILE_INTERVAL_SECONDS = 90
 
 
 @dataclass
@@ -477,6 +478,35 @@ def update_order_paid(order_id: str, delivered_items: list[dict[str, str]], gate
     return telegram_user_id
 
 
+def send_delivery_message(telegram_user_id: int, message: str) -> None:
+    if telegram_app and bot_loop:
+        asyncio.run_coroutine_threadsafe(
+            telegram_app.bot.send_message(chat_id=telegram_user_id, text=message),
+            bot_loop,
+        )
+        return
+
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json={"chat_id": telegram_user_id, "text": message},
+        timeout=30,
+    ).raise_for_status()
+
+
+def fulfill_paid_order(order_id: str, gateway_txn_id: str = "") -> bool:
+    order = order_by_id(order_id)
+    if not order:
+        return False
+    if str(order.get("status", "")).strip().lower() == "paid":
+        return True
+
+    delivered_items = mark_reserved_sold(str(order.get("plan_id", "")), order_id)
+    telegram_user_id = update_order_paid(order_id, delivered_items, gateway_txn_id)
+    if telegram_user_id:
+        send_delivery_message(telegram_user_id, format_delivery_message(order, delivered_items))
+    return True
+
+
 def list_user_orders(telegram_user_id: int) -> list[dict[str, str]]:
     _, _, _, orders_ws = ensure_sheet_schema()
     return [
@@ -484,6 +514,33 @@ def list_user_orders(telegram_user_id: int) -> list[dict[str, str]]:
         for row in row_dicts(orders_ws)
         if str(row.get("telegram_user_id", "")).strip() == str(telegram_user_id)
     ]
+
+
+def reconcile_pending_paid_orders(limit: int = 20) -> int:
+    _, _, _, orders_ws = ensure_sheet_schema()
+    pending_orders = [
+        row
+        for row in row_dicts(orders_ws)
+        if str(row.get("status", "")).strip().lower() == "pending"
+    ][-limit:]
+
+    delivered_count = 0
+    for order in pending_orders:
+        order_id = str(order.get("order_id", "")).strip()
+        if not order_id:
+            continue
+        try:
+            status = check_imb_order_status(order_id)
+        except requests.RequestException as exc:
+            print(f"Pending reconcile failed for {order_id}: {exc}")
+            continue
+        if not is_imb_status_paid(status):
+            continue
+        result = status.get("result") or {}
+        gateway_txn_id = str(result.get("utr") or result.get("orderId") or order_id).strip()
+        if fulfill_paid_order(order_id, gateway_txn_id):
+            delivered_count += 1
+    return delivered_count
 
 
 def update_dashboard_summary(dashboard, one_month, six_month, orders_ws) -> None:
@@ -779,15 +836,14 @@ def payment_thanks():
 @flask_app.post("/imb/webhook")
 def imb_webhook():
     raw_body = request.get_data()
-    forwarded = forward_to_existing_website(raw_body, request.headers.get("Content-Type", ""))
-    if WEBHOOK_FORWARD_STRICT and not forwarded:
-        return {"ok": False, "error": "website forward failed"}, 502
+    content_type = request.headers.get("Content-Type", "")
 
     payload = request.form.to_dict(flat=True) or (request.get_json(silent=True) or {})
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     status = str(payload.get("status") or result.get("txnStatus") or result.get("status") or "").upper()
     order_id = str(payload.get("order_id") or result.get("orderId") or "").strip()
     gateway_txn_id = str(result.get("utr") or result.get("orderId") or order_id).strip()
+    handled = False
 
     if order_id and status in {"SUCCESS", "COMPLETED", "TRUE"}:
         try:
@@ -807,15 +863,19 @@ def imb_webhook():
 
         verified_result = verified_status.get("result") or {}
         verified_txn_id = str(verified_result.get("utr") or verified_result.get("orderId") or gateway_txn_id).strip()
-        delivered_items = mark_reserved_sold(str(order.get("plan_id", "")), order_id)
-        telegram_user_id = update_order_paid(order_id, delivered_items, verified_txn_id)
-        if telegram_user_id and telegram_app and bot_loop:
-            message = format_delivery_message(order, delivered_items)
-            asyncio.run_coroutine_threadsafe(
-                telegram_app.bot.send_message(chat_id=telegram_user_id, text=message),
-                bot_loop,
-            )
-    return {"ok": True}
+        handled = fulfill_paid_order(order_id, verified_txn_id)
+
+    if WEBHOOK_FORWARD_STRICT:
+        forwarded = forward_to_existing_website(raw_body, content_type)
+        if not forwarded:
+            return {"ok": False, "error": "website forward failed"}, 502
+    else:
+        threading.Thread(
+            target=forward_to_existing_website,
+            args=(raw_body, content_type),
+            daemon=True,
+        ).start()
+    return {"ok": True, "handled": handled}
 
 
 @flask_app.post("/telegram/webhook")
@@ -842,6 +902,17 @@ def run_bot_loop() -> None:
         return
     asyncio.set_event_loop(bot_loop)
     bot_loop.run_forever()
+
+
+def run_reconcile_worker() -> None:
+    while True:
+        try:
+            delivered = reconcile_pending_paid_orders()
+            if delivered:
+                print(f"Reconciled and delivered {delivered} paid order(s).")
+        except Exception as exc:
+            print(f"Pending reconcile worker error: {exc}")
+        time.sleep(RECONCILE_INTERVAL_SECONDS)
 
 
 def build_app() -> Application:
@@ -884,6 +955,7 @@ def main() -> None:
         ),
         bot_loop,
     ).result(timeout=60)
+    threading.Thread(target=run_reconcile_worker, daemon=True).start()
     run_flask()
 
 
