@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import gspread
@@ -49,6 +49,9 @@ WEBHOOK_FORWARD_STRICT = os.getenv("WEBHOOK_FORWARD_STRICT", "false").strip().lo
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
 SUPPORT_WHATSAPP = os.getenv("SUPPORT_WHATSAPP", "+91 XXXXX XXXXX")
+CONFIG_HEADERS = ["key", "value", "description"]
+CONFIG_START_COL = 8
+CONFIG_RANGE = "H:J"
 
 PLAN_1 = "1m"
 PLAN_6 = "6m"
@@ -111,6 +114,9 @@ DASHBOARD_DEFAULTS = [
     ["1_month_price", "99", "Customer price for one 1 Month inventory item."],
     ["6_month_price", "499", "Customer price for one 6 Month inventory item."],
     ["default_password_or_pin", "ChangeMe123", "Auto-filled for new inventory rows if blank."],
+    ["support_whatsapp", SUPPORT_WHATSAPP, "WhatsApp number shown in delivery message."],
+    ["report_start_date", "", "YYYY-MM-DD range report start date."],
+    ["report_end_date", "", "YYYY-MM-DD range report end date."],
     ["total_sales_amount", "0", "Auto summary, do not edit."],
     ["1_month_sold", "0", "Auto summary, do not edit."],
     ["1_month_remaining", "0", "Auto summary, do not edit."],
@@ -193,6 +199,10 @@ def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: i
     except gspread.WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(title=title, rows=rows, cols=len(headers))
 
+    min_cols = 10 if title == DASHBOARD_SHEET else len(headers)
+    if worksheet.col_count < min_cols:
+        worksheet.resize(rows=max(worksheet.row_count, rows), cols=min_cols)
+
     first_row = worksheet.row_values(1)
     if first_row[: len(headers)] != headers:
         worksheet.batch_clear([f"A1:{column_letter(max(worksheet.col_count, len(headers)))}1"])
@@ -208,6 +218,22 @@ def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: i
     )
     worksheet.freeze(rows=1)
     return worksheet
+
+
+def style_range(worksheet, cell_range: str, background: tuple[float, float, float], text_color=(1, 1, 1)) -> None:
+    worksheet.format(
+        cell_range,
+        {
+            "backgroundColor": {"red": background[0], "green": background[1], "blue": background[2]},
+            "textFormat": {
+                "bold": True,
+                "foregroundColor": {"red": text_color[0], "green": text_color[1], "blue": text_color[2]},
+            },
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        },
+    )
 
 
 def ensure_sheet_schema(force: bool = False):
@@ -303,6 +329,19 @@ def remember_customer_async(user) -> None:
     threading.Thread(target=worker, daemon=True).start()
 
 
+def remember_customer_from_payload(payload: dict) -> None:
+    user_payload = payload.get("message", {}).get("from") or payload.get("callback_query", {}).get("from") or {}
+    if not user_payload.get("id"):
+        return
+
+    class PayloadUser:
+        id = user_payload.get("id")
+        username = user_payload.get("username", "")
+        first_name = user_payload.get("first_name", "")
+
+    remember_customer_async(PayloadUser)
+
+
 def active_customer_ids() -> list[int]:
     ids = []
     for row in row_dicts(customers_worksheet()):
@@ -314,29 +353,52 @@ def active_customer_ids() -> list[int]:
     return sorted(set(ids))
 
 
+def dashboard_config_rows(dashboard) -> list[list[str]]:
+    values = dashboard.get(CONFIG_RANGE)
+    if len(values) <= 1:
+        return []
+    return values[1:]
+
+
 def ensure_dashboard_defaults(dashboard) -> None:
-    existing = {str(row.get("key", "")).strip() for row in row_dicts(dashboard)}
+    dashboard.update(range_name="H1:J1", values=[CONFIG_HEADERS])
+    dashboard.format("H1:J1", DASHBOARD_HEADER_FORMAT)
+    existing = {row[0].strip() for row in dashboard_config_rows(dashboard) if row and row[0].strip()}
     append_rows = [row for row in DASHBOARD_DEFAULTS if row[0] not in existing]
     if append_rows:
-        dashboard.append_rows(append_rows, value_input_option="USER_ENTERED")
+        start_row = len(dashboard_config_rows(dashboard)) + 2
+        dashboard.update(
+            range_name=f"H{start_row}:J{start_row + len(append_rows) - 1}",
+            values=append_rows,
+            value_input_option="RAW",
+        )
+    dashboard.format(
+        "H:J",
+        {
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        },
+    )
 
 
 def get_dashboard_value(dashboard, key: str, default: str = "") -> str:
-    for row in row_dicts(dashboard):
-        if str(row.get("key", "")).strip() == key:
-            return str(row.get("value", "")).strip() or default
+    for row in dashboard_config_rows(dashboard):
+        row += [""] * (3 - len(row))
+        if row[0].strip() == key:
+            return row[1].strip() or default
     return default
 
 
 def set_dashboard_value(dashboard, key: str, value: str, description: str = "") -> None:
-    try:
-        cell = dashboard.find(key, in_column=1)
-    except gspread.CellNotFound:
-        dashboard.append_row([key, value, description], value_input_option="USER_ENTERED")
-        return
-    dashboard.update_cell(cell.row, 2, value)
-    if description:
-        dashboard.update_cell(cell.row, 3, description)
+    for index, row in enumerate(dashboard_config_rows(dashboard), start=2):
+        row += [""] * (3 - len(row))
+        if row[0].strip() == key:
+            dashboard.update(range_name=f"I{index}:J{index}", values=[[value, description or row[2]]], value_input_option="RAW")
+            return
+    current_rows = dashboard_config_rows(dashboard)
+    next_row = len(current_rows) + 2
+    dashboard.update(range_name=f"H{next_row}:J{next_row}", values=[[key, value, description]], value_input_option="RAW")
 
 
 def normalize_inventory_sheet(worksheet, default_pin: str = "") -> None:
@@ -356,6 +418,57 @@ def normalize_inventory_sheet(worksheet, default_pin: str = "") -> None:
 
     if batch_updates:
         worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
+
+
+def parse_iso_date(value: str) -> Optional[date]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text[:10], fmt).date()
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def order_report_rows(orders_ws) -> list[dict]:
+    rows = []
+    for row in row_dicts(orders_ws):
+        if str(row.get("status", "")).strip().lower() != "paid":
+            continue
+        quantity = 0
+        amount = 0
+        try:
+            quantity = int(float(str(row.get("quantity", "0")).strip()))
+            amount = int(float(str(row.get("amount_inr", "0")).strip()))
+        except ValueError:
+            pass
+        paid_date = parse_iso_date(str(row.get("paid_at") or row.get("created_at") or ""))
+        rows.append(
+            {
+                "seller": str(row.get("username", "")).strip() or str(row.get("telegram_user_id", "")).strip() or "Unknown",
+                "quantity": quantity,
+                "amount": amount,
+                "date": paid_date,
+            }
+        )
+    return rows
+
+
+def count_quantity(rows: list[dict], start: Optional[date] = None, end: Optional[date] = None) -> int:
+    total = 0
+    for row in rows:
+        row_date = row.get("date")
+        if start and (not row_date or row_date < start):
+            continue
+        if end and (not row_date or row_date > end):
+            continue
+        total += int(row.get("quantity") or 0)
+    return total
 
 
 def inventory_for_plan(plan_id: str):
@@ -662,6 +775,98 @@ def update_dashboard_summary(dashboard, one_month, six_month, orders_ws) -> None
     set_dashboard_value(dashboard, "1_month_sold", str(one_sold), "Auto summary, do not edit.")
     set_dashboard_value(dashboard, "6_month_sold", str(six_sold), "Auto summary, do not edit.")
     set_dashboard_value(dashboard, "total_sales_amount", str(total_sales), "Auto summary, do not edit.")
+    render_visual_dashboard(dashboard, one_available + six_available, one_sold, six_sold, orders_ws)
+
+
+def render_visual_dashboard(dashboard, total_stock: int, one_sold: int, six_sold: int, orders_ws) -> None:
+    paid_rows = order_report_rows(orders_ws)
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+    month_start = today.replace(day=1)
+
+    start_date = parse_iso_date(get_dashboard_value(dashboard, "report_start_date", "")) or month_start
+    end_date = parse_iso_date(get_dashboard_value(dashboard, "report_end_date", "")) or today
+    if not get_dashboard_value(dashboard, "report_start_date", ""):
+        set_dashboard_value(dashboard, "report_start_date", start_date.isoformat(), "YYYY-MM-DD range report start date.")
+    if not get_dashboard_value(dashboard, "report_end_date", ""):
+        set_dashboard_value(dashboard, "report_end_date", end_date.isoformat(), "YYYY-MM-DD range report end date.")
+
+    today_sell = count_quantity(paid_rows, today, today)
+    yesterday_sell = count_quantity(paid_rows, yesterday, yesterday)
+    monthly_sell = count_quantity(paid_rows, month_start, today)
+    range_sell = count_quantity(paid_rows, start_date, end_date)
+
+    seller_totals: dict[str, dict[str, int]] = {}
+    for row in paid_rows:
+        seller = row["seller"]
+        seller_totals.setdefault(seller, {"today": 0, "yesterday": 0, "monthly": 0, "range": 0, "total": 0})
+        quantity = row["quantity"]
+        row_date = row["date"]
+        seller_totals[seller]["total"] += quantity
+        if row_date == today:
+            seller_totals[seller]["today"] += quantity
+        if row_date == yesterday:
+            seller_totals[seller]["yesterday"] += quantity
+        if row_date and month_start <= row_date <= today:
+            seller_totals[seller]["monthly"] += quantity
+        if row_date and start_date <= row_date <= end_date:
+            seller_totals[seller]["range"] += quantity
+
+    top_sellers = sorted(seller_totals.items(), key=lambda item: item[1]["total"], reverse=True)[:5]
+    seller_rows = sorted(seller_totals.items(), key=lambda item: item[1]["total"], reverse=True)[:10]
+
+    dashboard.batch_clear(["A1:F28"])
+    values = [
+        ["SALES DASHBOARD FULL DATA", "", "", "", "", ""],
+        ["Today", today_sell, "Yesterday", yesterday_sell, "", ""],
+        ["Monthly", monthly_sell, "Stock", total_stock, "", ""],
+        ["", "", "", "", "", ""],
+        ["Start Date", start_date.isoformat(), "", end_date.isoformat(), "", ""],
+        ["Range Sell", range_sell, "", "", "", ""],
+        ["", "", "", "", "", ""],
+        ["TOP 5 SELLER", "", "", "", "", ""],
+        ["Seller Name", "Quantity", "", "", "", ""],
+    ]
+    for seller, metrics in top_sellers:
+        values.append([seller, metrics["total"], "", "", "", ""])
+    while len(values) < 15:
+        values.append(["", "", "", "", "", ""])
+    values.extend(
+        [
+            ["", "", "", "", "", ""],
+            ["SELLER WISE SELL", "", "", "", "", ""],
+            ["Seller", "Today", "Yesterday", "Monthly", "Range", "Total"],
+        ]
+    )
+    for seller, metrics in seller_rows:
+        values.append(
+            [
+                seller,
+                metrics["today"],
+                metrics["yesterday"],
+                metrics["monthly"],
+                metrics["range"],
+                metrics["total"],
+            ]
+        )
+
+    dashboard.update(range_name=f"A1:F{len(values)}", values=values, value_input_option="USER_ENTERED")
+    style_range(dashboard, "A1:F1", (0.02, 0.11, 0.16))
+    style_range(dashboard, "A8:F8", (0.20, 0.18, 0.55))
+    style_range(dashboard, "A9:B9", (0.20, 0.18, 0.55))
+    style_range(dashboard, "A17:F18", (0.10, 0.15, 0.22))
+    style_range(dashboard, "B2:B2", (0.18, 0.39, 0.88))
+    style_range(dashboard, "D2:D2", (0.30, 0.42, 0.60))
+    style_range(dashboard, "B3:B3", (0.04, 0.63, 0.48))
+    style_range(dashboard, "D3:D3", (1.00, 0.35, 0.04))
+    style_range(dashboard, "A2:A6", (1, 1, 1), (0, 0, 0))
+    style_range(dashboard, "C2:C6", (1, 1, 1), (0, 0, 0))
+    style_range(dashboard, "B5:D5", (1.0, 0.93, 0.70), (0, 0, 0))
+    style_range(dashboard, "B6:B6", (0.08, 0.60, 0.58))
+    dashboard.format("A10:B15", {"backgroundColor": {"red": 0.90, "green": 0.93, "blue": 0.98}})
+    dashboard.format("A19:F28", {"backgroundColor": {"red": 0.90, "green": 0.98, "blue": 0.94}})
+    dashboard.format("A:F", {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "textFormat": {"bold": True}})
+    dashboard.freeze(rows=1)
 
 
 def create_payment_link(order_id: str, update: Update, plan: PlanInfo, quantity: int) -> dict[str, str]:
@@ -1086,6 +1291,7 @@ def format_delivery_message(order: dict[str, str], delivered_items: list[dict[st
     plan_name = str(order.get("plan_name", "Plan"))
     purchase_date = datetime.now().strftime("%d/%m/%Y")
     default_pin = get_dashboard_value(worksheet_cache[DASHBOARD_SHEET], "default_password_or_pin", "ChangeMe123")
+    whatsapp_number = get_dashboard_value(worksheet_cache[DASHBOARD_SHEET], "support_whatsapp", SUPPORT_WHATSAPP)
     lines = [
         "📦 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 📦",
         "",
@@ -1112,7 +1318,7 @@ def format_delivery_message(order: dict[str, str], delivered_items: list[dict[st
     lines.extend(
         [
             "",
-            f"📱 WhatsApp Number: {SUPPORT_WHATSAPP}",
+            f"📱 WhatsApp Number: {whatsapp_number}",
         ]
     )
     return "\n".join(f"<b>{html.escape(line)}</b>" if line else "" for line in lines)
@@ -1322,6 +1528,7 @@ def telegram_webhook():
     if not payload:
         return {"ok": False, "error": "empty update"}, 400
 
+    remember_customer_from_payload(payload)
     update = Update.de_json(payload, telegram_app.bot)
     future = asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), bot_loop)
     future.result(timeout=30)
