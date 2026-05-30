@@ -16,7 +16,7 @@ from flask import Flask, request
 from google.oauth2.service_account import Credentials
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 
 load_dotenv()
@@ -57,16 +57,12 @@ PLANS = {
 }
 
 INVENTORY_HEADERS = [
-    "item_id",
-    "item_value",
-    "password_or_pin",
+    "mail_id",
     "added_date",
-    "status",
+    "purchase_date",
     "sold_to_username",
     "telegram_user_id",
     "order_id",
-    "purchase_date",
-    "notes",
 ]
 ORDER_HEADERS = [
     "order_id",
@@ -79,7 +75,7 @@ ORDER_HEADERS = [
     "status",
     "gateway_txn_id",
     "payment_link_url",
-    "item_ids",
+    "mail_ids",
     "delivered_items",
     "created_at",
     "paid_at",
@@ -95,6 +91,21 @@ CUSTOMER_HEADERS = [
     "notes",
 ]
 DASHBOARD_HEADERS = ["key", "value", "description"]
+INVENTORY_HEADER_FORMAT = {
+    "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+    "backgroundColor": {"red": 0.1, "green": 0.45, "blue": 0.72},
+    "horizontalAlignment": "CENTER",
+}
+DASHBOARD_HEADER_FORMAT = {
+    "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+    "backgroundColor": {"red": 0.12, "green": 0.52, "blue": 0.32},
+    "horizontalAlignment": "CENTER",
+}
+ORDER_HEADER_FORMAT = {
+    "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+    "backgroundColor": {"red": 0.47, "green": 0.27, "blue": 0.72},
+    "horizontalAlignment": "CENTER",
+}
 DASHBOARD_DEFAULTS = [
     ["1_month_price", "99", "Customer price for one 1 Month inventory item."],
     ["6_month_price", "499", "Customer price for one 6 Month inventory item."],
@@ -167,6 +178,14 @@ def column_letter(count: int) -> str:
     return result
 
 
+def header_format_for(title: str) -> dict:
+    if title in {SHEET_1_MONTH, SHEET_6_MONTH}:
+        return INVENTORY_HEADER_FORMAT
+    if title == DASHBOARD_SHEET:
+        return DASHBOARD_HEADER_FORMAT
+    return ORDER_HEADER_FORMAT
+
+
 def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: int = 500):
     try:
         worksheet = spreadsheet.worksheet(title)
@@ -175,11 +194,10 @@ def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: i
 
     first_row = worksheet.row_values(1)
     if first_row[: len(headers)] != headers:
+        worksheet.batch_clear([f"A1:{column_letter(max(worksheet.col_count, len(headers)))}1"])
         worksheet.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
-        worksheet.format(
-            f"A1:{column_letter(len(headers))}1",
-            {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.9, "green": 0.94, "blue": 1}},
-        )
+    worksheet.format(f"A1:{column_letter(len(headers))}1", header_format_for(title))
+    worksheet.freeze(rows=1)
     return worksheet
 
 
@@ -312,7 +330,7 @@ def set_dashboard_value(dashboard, key: str, value: str, description: str = "") 
         dashboard.update_cell(cell.row, 3, description)
 
 
-def normalize_inventory_sheet(worksheet, default_pin: str) -> None:
+def normalize_inventory_sheet(worksheet, default_pin: str = "") -> None:
     rows = worksheet.get_all_values()
     if len(rows) <= 1:
         return
@@ -320,18 +338,12 @@ def normalize_inventory_sheet(worksheet, default_pin: str) -> None:
     batch_updates = []
     for index, row in enumerate(rows[1:], start=2):
         values = row + [""] * (len(INVENTORY_HEADERS) - len(row))
-        item_value = values[1].strip()
-        if not item_value:
+        mail_id = values[0].strip()
+        if not mail_id:
             continue
 
-        if not values[0].strip():
-            batch_updates.append({"range": f"A{index}", "values": [["item_" + uuid.uuid4().hex[:10]]]})
-        if not values[2].strip():
-            batch_updates.append({"range": f"C{index}", "values": [[default_pin]]})
-        if not values[3].strip():
-            batch_updates.append({"range": f"D{index}", "values": [[now_iso()]]})
-        if not values[4].strip():
-            batch_updates.append({"range": f"E{index}", "values": [["available"]]})
+        if not values[1].strip():
+            batch_updates.append({"range": f"B{index}", "values": [[now_iso()]]})
 
     if batch_updates:
         worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
@@ -354,9 +366,10 @@ def available_inventory_rows(worksheet) -> list[tuple[int, dict[str, str]]]:
     rows = row_dicts(worksheet)
     available = []
     for row_num, row in enumerate(rows, start=2):
-        item_value = str(row.get("item_value", "")).strip()
-        status = str(row.get("status", "")).strip().lower()
-        if item_value and status in {"", "available"}:
+        mail_id = str(row.get("mail_id", "")).strip()
+        purchase_date = str(row.get("purchase_date", "")).strip()
+        order_id = str(row.get("order_id", "")).strip()
+        if mail_id and not purchase_date and not order_id:
             available.append((row_num, row))
     return available
 
@@ -409,10 +422,9 @@ def reserve_inventory(plan_id: str, quantity: int, order_id: str, user) -> list[
     for row_num, row in available[:quantity]:
         batch_updates.extend(
             [
-                {"range": f"E{row_num}", "values": [["reserved"]]},
-                {"range": f"F{row_num}", "values": [[user.username or ""]]},
-                {"range": f"G{row_num}", "values": [[str(user.id)]]},
-                {"range": f"H{row_num}", "values": [[order_id]]},
+                {"range": f"D{row_num}", "values": [[user.username or ""]]},
+                {"range": f"E{row_num}", "values": [[str(user.id)]]},
+                {"range": f"F{row_num}", "values": [[order_id]]},
             ]
         )
         reserved.append(row)
@@ -427,12 +439,11 @@ def release_reserved_inventory(plan_id: str, order_id: str) -> None:
     for row_num, row in enumerate(row_dicts(worksheet), start=2):
         if str(row.get("order_id", "")).strip() != order_id:
             continue
-        if str(row.get("status", "")).strip().lower() != "reserved":
+        if str(row.get("purchase_date", "")).strip():
             continue
         batch_updates.extend(
             [
-                {"range": f"E{row_num}", "values": [["available"]]},
-                {"range": f"F{row_num}:H{row_num}", "values": [["", "", ""]]},
+                {"range": f"D{row_num}:F{row_num}", "values": [["", "", ""]]},
             ]
         )
     if batch_updates:
@@ -449,8 +460,7 @@ def mark_reserved_sold(plan_id: str, order_id: str) -> list[dict[str, str]]:
             continue
         batch_updates.extend(
             [
-                {"range": f"E{row_num}", "values": [["sold"]]},
-                {"range": f"I{row_num}", "values": [[now_iso()]]},
+                {"range": f"C{row_num}", "values": [[now_iso()]]},
             ]
         )
         delivered.append(row)
@@ -464,7 +474,7 @@ def append_order(update: Update, plan: PlanInfo, quantity: int, reserved_items: 
     _, _, _, orders_ws = ensure_sheet_schema()
     order_id = "ord_" + uuid.uuid4().hex[:12]
     user = update.effective_user
-    item_ids = ", ".join(str(item.get("item_id", "")).strip() for item in reserved_items)
+    item_ids = ", ".join(str(item.get("mail_id", "")).strip() for item in reserved_items)
     orders_ws.append_row(
         [
             order_id,
@@ -493,7 +503,7 @@ def create_order_with_inventory(update: Update, plan: PlanInfo, quantity: int) -
     reserved_items = reserve_inventory(plan.plan_id, quantity, order_id, update.effective_user)
     _, _, _, orders_ws = ensure_sheet_schema()
     user = update.effective_user
-    item_ids = ", ".join(str(item.get("item_id", "")).strip() for item in reserved_items)
+    item_ids = ", ".join(str(item.get("mail_id", "")).strip() for item in reserved_items)
     orders_ws.append_row(
         [
             order_id,
@@ -550,7 +560,7 @@ def update_order_paid(order_id: str, delivered_items: list[dict[str, str]], gate
 
     row_values = orders_ws.row_values(cell.row)
     telegram_user_id = int(row_values[1]) if len(row_values) > 1 and row_values[1].isdigit() else None
-    delivered_values = ", ".join(str(item.get("item_value", "")).strip() for item in delivered_items)
+    delivered_values = ", ".join(str(item.get("mail_id", "")).strip() for item in delivered_items)
     orders_ws.update_cell(cell.row, 8, "paid")
     if gateway_txn_id:
         orders_ws.update_cell(cell.row, 9, gateway_txn_id)
@@ -628,8 +638,8 @@ def reconcile_pending_paid_orders(limit: int = 20) -> int:
 def update_dashboard_summary(dashboard, one_month, six_month, orders_ws) -> None:
     one_available = len(available_inventory_rows(one_month))
     six_available = len(available_inventory_rows(six_month))
-    one_sold = sum(1 for row in row_dicts(one_month) if str(row.get("status", "")).strip().lower() == "sold")
-    six_sold = sum(1 for row in row_dicts(six_month) if str(row.get("status", "")).strip().lower() == "sold")
+    one_sold = sum(1 for row in row_dicts(one_month) if str(row.get("purchase_date", "")).strip())
+    six_sold = sum(1 for row in row_dicts(six_month) if str(row.get("purchase_date", "")).strip())
     total_sales = 0
     for row in row_dicts(orders_ws):
         if str(row.get("status", "")).strip().lower() == "paid":
@@ -953,6 +963,74 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def addstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("<b>⛔ Ye admin command hai.</b>", parse_mode=ParseMode.HTML)
+        return
+    if not context.args or context.args[0].lower() not in PLANS:
+        await update.message.reply_text(
+            "<b>📝 Format:</b>\n<code>/addstock 1m</code>\n<code>/addstock 6m</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    plan_id = context.args[0].lower()
+    context.user_data["awaiting_stock_plan"] = plan_id
+    await update.message.reply_text(
+        f"<b>📥 {html.escape(PLANS[plan_id]['name'])} ke mail IDs bhejein.</b>\n\n"
+        "<b>Ek line me ek mail ID:</b>\n"
+        "<code>mail1@example.com\nmail2@example.com\nmail3@example.com</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def stock_bulk_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    plan_id = context.user_data.get("awaiting_stock_plan")
+    if not plan_id:
+        return
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        context.user_data.pop("awaiting_stock_plan", None)
+        return
+
+    raw_lines = (update.message.text or "").splitlines()
+    mail_ids = []
+    seen = set()
+    for line in raw_lines:
+        value = line.strip()
+        if not value or value in seen:
+            continue
+        mail_ids.append(value)
+        seen.add(value)
+
+    if not mail_ids:
+        await update.message.reply_text("<b>⚠️ Koi valid mail ID nahi mila.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    worksheet = inventory_for_plan(plan_id)
+    existing = {str(row.get("mail_id", "")).strip().lower() for row in row_dicts(worksheet)}
+    rows = []
+    skipped = 0
+    timestamp = now_iso()
+    for mail_id in mail_ids:
+        if mail_id.lower() in existing:
+            skipped += 1
+            continue
+        rows.append([mail_id, timestamp, "", "", "", ""])
+
+    if rows:
+        worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+        clear_plan_cache()
+    context.user_data.pop("awaiting_stock_plan", None)
+
+    await update.message.reply_text(
+        f"<b>✅ Stock Added</b>\n\n"
+        f"<b>📦 Plan:</b> {html.escape(PLANS[plan_id]['name'])}\n"
+        f"<b>➕ Added:</b> {len(rows)}\n"
+        f"<b>⏭ Skipped Duplicate:</b> {skipped}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -995,8 +1073,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 def format_delivery_message(order: dict[str, str], delivered_items: list[dict[str, str]]) -> str:
+    ensure_sheet_schema()
     plan_name = str(order.get("plan_name", "Plan"))
     purchase_date = datetime.now().strftime("%d/%m/%Y")
+    default_pin = get_dashboard_value(worksheet_cache[DASHBOARD_SHEET], "default_password_or_pin", "ChangeMe123")
     lines = [
         "📦 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 📦",
         "",
@@ -1009,14 +1089,13 @@ def format_delivery_message(order: dict[str, str], delivered_items: list[dict[st
     ]
 
     for index, item in enumerate(delivered_items, start=1):
-        item_value = str(item.get("item_value", "")).strip()
-        pin = str(item.get("password_or_pin", "")).strip()
+        item_value = str(item.get("mail_id", "")).strip()
         label = "📧 Mail ID" if len(delivered_items) == 1 else f"📧 Mail ID {index}"
         lines.extend(
             [
                 f"{label}: {item_value}",
                 "",
-                f"🔑 Password: {pin}",
+                f"🔑 Password: {default_pin}",
                 "",
             ]
         )
@@ -1271,7 +1350,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("dashboard", dashboard_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("addstock", addstock_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, stock_bulk_message))
     return app
 
 

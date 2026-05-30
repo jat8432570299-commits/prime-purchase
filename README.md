@@ -20,21 +20,16 @@ Bot `/sync` ya first run par ye tabs aur headers create kar dega.
 `1 Month Inventory`
 
 ```text
-item_id | item_value | password_or_pin | added_date | status | sold_to_username | telegram_user_id | order_id | purchase_date | notes
+mail_id | added_date | purchase_date | sold_to_username | telegram_user_id | order_id
 ```
 
 `6 Month Inventory`
 
 ```text
-item_id | item_value | password_or_pin | added_date | status | sold_to_username | telegram_user_id | order_id | purchase_date | notes
+mail_id | added_date | purchase_date | sold_to_username | telegram_user_id | order_id
 ```
 
-Inventory add karne ka simple tareeka: `item_value` column me apna legal item/code add karein. Bot next sync/run par blank fields auto fill karega:
-
-- `item_id`
-- `password_or_pin`
-- `added_date`
-- `status = available`
+Inventory add karne ka simple tareeka: admin bot me `/addstock 1m` ya `/addstock 6m` bhejein, phir ek line me ek mail ID paste karein. Bot `added_date` auto fill karega. Password Dashboard ke `default_password_or_pin` se delivery message me aayega.
 
 `Dashboard`
 
@@ -76,9 +71,11 @@ order_id | telegram_user_id | username | plan_id | plan_name | quantity | amount
 /orders
 /dashboard
 /sync
+/addstock 1m
+/addstock 6m
 ```
 
-`/dashboard` aur `/sync` sirf admin Telegram IDs ke liye hain.
+`/dashboard`, `/sync`, `/broadcast`, aur `/addstock` sirf admin Telegram IDs ke liye hain.
 
 ## Setup
 
