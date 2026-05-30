@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -96,6 +97,11 @@ DASHBOARD_DEFAULTS = [
 flask_app = Flask(__name__)
 telegram_app: Optional[Application] = None
 bot_loop: Optional[asyncio.AbstractEventLoop] = None
+spreadsheet_cache = None
+worksheet_cache: dict[str, gspread.Worksheet] = {}
+schema_ready = False
+plan_cache = (0.0, [])
+PLAN_CACHE_SECONDS = 20
 
 
 @dataclass
@@ -126,13 +132,18 @@ def require_env() -> None:
 
 
 def get_spreadsheet():
+    global spreadsheet_cache
+    if spreadsheet_cache:
+        return spreadsheet_cache
+
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     if SERVICE_ACCOUNT_JSON:
         creds = Credentials.from_service_account_info(json.loads(SERVICE_ACCOUNT_JSON), scopes=scopes)
     else:
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scopes)
     client = gspread.authorize(creds)
-    return client.open_by_key(GOOGLE_SHEET_ID)
+    spreadsheet_cache = client.open_by_key(GOOGLE_SHEET_ID)
+    return spreadsheet_cache
 
 
 def column_letter(count: int) -> str:
@@ -159,7 +170,16 @@ def get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: i
     return worksheet
 
 
-def ensure_sheet_schema():
+def ensure_sheet_schema(force: bool = False):
+    global schema_ready, worksheet_cache, plan_cache
+    if schema_ready and not force:
+        return (
+            worksheet_cache[SHEET_1_MONTH],
+            worksheet_cache[SHEET_6_MONTH],
+            worksheet_cache[DASHBOARD_SHEET],
+            worksheet_cache[ORDERS_SHEET],
+        )
+
     spreadsheet = get_spreadsheet()
     one_month = get_or_create_worksheet(spreadsheet, SHEET_1_MONTH, INVENTORY_HEADERS)
     six_month = get_or_create_worksheet(spreadsheet, SHEET_6_MONTH, INVENTORY_HEADERS)
@@ -169,6 +189,14 @@ def ensure_sheet_schema():
     normalize_inventory_sheet(one_month, get_dashboard_value(dashboard, "default_password_or_pin", "ChangeMe123"))
     normalize_inventory_sheet(six_month, get_dashboard_value(dashboard, "default_password_or_pin", "ChangeMe123"))
     update_dashboard_summary(dashboard, one_month, six_month, orders)
+    worksheet_cache = {
+        SHEET_1_MONTH: one_month,
+        SHEET_6_MONTH: six_month,
+        DASHBOARD_SHEET: dashboard,
+        ORDERS_SHEET: orders,
+    }
+    schema_ready = True
+    plan_cache = (0.0, [])
     return one_month, six_month, dashboard, orders
 
 
@@ -227,8 +255,8 @@ def normalize_inventory_sheet(worksheet, default_pin: str) -> None:
 
 
 def inventory_for_plan(plan_id: str):
-    spreadsheet = get_spreadsheet()
-    return spreadsheet.worksheet(PLANS[plan_id]["sheet"])
+    one_month, six_month, _, _ = ensure_sheet_schema()
+    return one_month if plan_id == PLAN_1 else six_month
 
 
 def plan_price(dashboard, plan_id: str) -> int:
@@ -251,19 +279,20 @@ def available_inventory_rows(worksheet) -> list[tuple[int, dict[str, str]]]:
 
 
 def get_plan_info(plan_id: str) -> PlanInfo:
-    one_month, six_month, dashboard, _ = ensure_sheet_schema()
-    worksheet = one_month if plan_id == PLAN_1 else six_month
-    return PlanInfo(
-        plan_id=plan_id,
-        name=PLANS[plan_id]["name"],
-        price_inr=plan_price(dashboard, plan_id),
-        stock=len(available_inventory_rows(worksheet)),
-    )
+    for plan in all_plan_info():
+        if plan.plan_id == plan_id:
+            return plan
+    raise RuntimeError("Invalid plan")
 
 
 def all_plan_info() -> list[PlanInfo]:
+    global plan_cache
+    cached_at, cached_plans = plan_cache
+    if cached_plans and time.time() - cached_at < PLAN_CACHE_SECONDS:
+        return cached_plans
+
     one_month, six_month, dashboard, _ = ensure_sheet_schema()
-    return [
+    plans = [
         PlanInfo(
             plan_id=PLAN_1,
             name=PLANS[PLAN_1]["name"],
@@ -277,6 +306,13 @@ def all_plan_info() -> list[PlanInfo]:
             stock=len(available_inventory_rows(six_month)),
         ),
     ]
+    plan_cache = (time.time(), plans)
+    return plans
+
+
+def clear_plan_cache() -> None:
+    global plan_cache
+    plan_cache = (0.0, [])
 
 
 def reserve_inventory(plan_id: str, quantity: int, order_id: str, user) -> list[dict[str, str]]:
@@ -286,24 +322,58 @@ def reserve_inventory(plan_id: str, quantity: int, order_id: str, user) -> list[
         raise RuntimeError("Stock kam hai.")
 
     reserved = []
+    batch_updates = []
     for row_num, row in available[:quantity]:
-        worksheet.update_cell(row_num, 5, "reserved")
-        worksheet.update_cell(row_num, 6, user.username or "")
-        worksheet.update_cell(row_num, 7, str(user.id))
-        worksheet.update_cell(row_num, 8, order_id)
+        batch_updates.extend(
+            [
+                {"range": f"E{row_num}", "values": [["reserved"]]},
+                {"range": f"F{row_num}", "values": [[user.username or ""]]},
+                {"range": f"G{row_num}", "values": [[str(user.id)]]},
+                {"range": f"H{row_num}", "values": [[order_id]]},
+            ]
+        )
         reserved.append(row)
+    worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
+    clear_plan_cache()
     return reserved
+
+
+def release_reserved_inventory(plan_id: str, order_id: str) -> None:
+    worksheet = inventory_for_plan(plan_id)
+    batch_updates = []
+    for row_num, row in enumerate(row_dicts(worksheet), start=2):
+        if str(row.get("order_id", "")).strip() != order_id:
+            continue
+        if str(row.get("status", "")).strip().lower() != "reserved":
+            continue
+        batch_updates.extend(
+            [
+                {"range": f"E{row_num}", "values": [["available"]]},
+                {"range": f"F{row_num}:H{row_num}", "values": [["", "", ""]]},
+            ]
+        )
+    if batch_updates:
+        worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
+        clear_plan_cache()
 
 
 def mark_reserved_sold(plan_id: str, order_id: str) -> list[dict[str, str]]:
     worksheet = inventory_for_plan(plan_id)
     delivered = []
+    batch_updates = []
     for row_num, row in enumerate(row_dicts(worksheet), start=2):
         if str(row.get("order_id", "")).strip() != order_id:
             continue
-        worksheet.update_cell(row_num, 5, "sold")
-        worksheet.update_cell(row_num, 9, now_iso())
+        batch_updates.extend(
+            [
+                {"range": f"E{row_num}", "values": [["sold"]]},
+                {"range": f"I{row_num}", "values": [[now_iso()]]},
+            ]
+        )
         delivered.append(row)
+    if batch_updates:
+        worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
+        clear_plan_cache()
     return delivered
 
 
@@ -362,6 +432,14 @@ def create_order_with_inventory(update: Update, plan: PlanInfo, quantity: int) -
         value_input_option="USER_ENTERED",
     )
     return order_id, reserved_items
+
+
+def extract_payment_url(payment_data: dict[str, str]) -> str:
+    for key in ("payment_url", "paymentUrl", "payment_link", "paymentLink", "url", "qr_url", "upi_qr_url"):
+        value = payment_data.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def update_order_payment_link(order_id: str, gateway_txn_id: str, payment_link_url: str) -> None:
@@ -556,19 +634,30 @@ async def create_order_and_send_payment(update: Update, plan_id: str, quantity: 
         await update.effective_message.reply_text(f"Stock sirf {plan.stock} bacha hai.")
         return
 
+    order_id = ""
     try:
         order_id, _ = create_order_with_inventory(update, plan, quantity)
         payment_data = create_payment_link(order_id, update, plan, quantity)
-        payment_link_url = payment_data.get("payment_url", "")
+        payment_link_url = extract_payment_url(payment_data)
         update_order_payment_link(order_id, payment_data.get("orderId", order_id), payment_link_url)
-    except (requests.HTTPError, RuntimeError) as exc:
-        await update.effective_message.reply_text("Order/payment create nahi ho paya. Admin ko batayein.")
+    except (requests.HTTPError, RuntimeError, requests.RequestException) as exc:
+        if order_id:
+            release_reserved_inventory(plan.plan_id, order_id)
+        await update.effective_message.reply_text(
+            "Payment order create nahi ho paya. Thodi der baad retry karein ya admin ko batayein."
+        )
         print(f"Order error: {exc}")
         return
 
-    paytm_link = payment_data.get("paytm_link", "")
-    phonepe_link = payment_data.get("phonepe_link", "")
-    bhim_link = payment_data.get("bhim_link", "")
+    if not payment_link_url:
+        release_reserved_inventory(plan.plan_id, order_id)
+        await update.effective_message.reply_text("Gateway ne payment link return nahi kiya. Admin ko batayein.")
+        print(f"Payment response without link for {order_id}: {payment_data}")
+        return
+
+    paytm_link = payment_data.get("paytm_link", "") or payment_data.get("paytmLink", "")
+    phonepe_link = payment_data.get("phonepe_link", "") or payment_data.get("phonepeLink", "")
+    bhim_link = payment_data.get("bhim_link", "") or payment_data.get("bhimLink", "")
     app_links = "\n".join(
         line
         for line in [
@@ -611,7 +700,7 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Ye admin command hai.")
         return
-    ensure_sheet_schema()
+    ensure_sheet_schema(force=True)
     await update.message.reply_text("Sheet headers, dashboard aur inventory auto fields synced.")
 
 
@@ -770,7 +859,7 @@ def build_app() -> Application:
 def main() -> None:
     global telegram_app, bot_loop
     require_env()
-    ensure_sheet_schema()
+    ensure_sheet_schema(force=True)
 
     telegram_app = build_app()
     bot_loop = asyncio.new_event_loop()
