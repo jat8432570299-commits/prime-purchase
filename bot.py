@@ -24,7 +24,7 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADMIN_TELEGRAM_IDS = {
     int(value.strip())
-    for value in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",")
+    for value in os.getenv("ADMIN_TELEGRAM_IDS", "6866560367").split(",")
     if value.strip().isdigit()
 }
 
