@@ -783,6 +783,14 @@ def order_confirmation_message(
     )
 
 
+def payment_button_url(payment_data: dict[str, str], payment_link_url: str) -> str:
+    for key in ("paytm_link", "paytmLink", "payment_url", "paymentUrl", "payment_link", "paymentLink"):
+        value = str(payment_data.get(key) or "").strip()
+        if value.startswith(("https://", "http://")):
+            return value
+    return payment_link_url
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     remember_customer_async(update.effective_user)
     await update.message.reply_text(
@@ -855,10 +863,14 @@ async def create_order_and_send_payment(update: Update, plan_id: str, quantity: 
         print(f"Payment response without link for {order_id}: {payment_data}")
         return
 
+    pay_now_url = payment_button_url(payment_data, payment_link_url)
     await update.effective_message.reply_text(
         order_confirmation_message(order_id, plan, quantity, payment_link_url),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("💳 Pay Now", url=pay_now_url)]]
+        ),
     )
 
 
