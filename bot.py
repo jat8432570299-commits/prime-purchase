@@ -206,24 +206,24 @@ def normalize_inventory_sheet(worksheet, default_pin: str) -> None:
     if len(rows) <= 1:
         return
 
+    batch_updates = []
     for index, row in enumerate(rows[1:], start=2):
         values = row + [""] * (len(INVENTORY_HEADERS) - len(row))
         item_value = values[1].strip()
         if not item_value:
             continue
 
-        updates = []
         if not values[0].strip():
-            updates.append((index, 1, "item_" + uuid.uuid4().hex[:10]))
+            batch_updates.append({"range": f"A{index}", "values": [["item_" + uuid.uuid4().hex[:10]]]})
         if not values[2].strip():
-            updates.append((index, 3, default_pin))
+            batch_updates.append({"range": f"C{index}", "values": [[default_pin]]})
         if not values[3].strip():
-            updates.append((index, 4, now_iso()))
+            batch_updates.append({"range": f"D{index}", "values": [[now_iso()]]})
         if not values[4].strip():
-            updates.append((index, 5, "available"))
+            batch_updates.append({"range": f"E{index}", "values": [["available"]]})
 
-        for row_num, col_num, value in updates:
-            worksheet.update_cell(row_num, col_num, value)
+    if batch_updates:
+        worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
 
 
 def inventory_for_plan(plan_id: str):
@@ -262,7 +262,21 @@ def get_plan_info(plan_id: str) -> PlanInfo:
 
 
 def all_plan_info() -> list[PlanInfo]:
-    return [get_plan_info(PLAN_1), get_plan_info(PLAN_6)]
+    one_month, six_month, dashboard, _ = ensure_sheet_schema()
+    return [
+        PlanInfo(
+            plan_id=PLAN_1,
+            name=PLANS[PLAN_1]["name"],
+            price_inr=plan_price(dashboard, PLAN_1),
+            stock=len(available_inventory_rows(one_month)),
+        ),
+        PlanInfo(
+            plan_id=PLAN_6,
+            name=PLANS[PLAN_6]["name"],
+            price_inr=plan_price(dashboard, PLAN_6),
+            stock=len(available_inventory_rows(six_month)),
+        ),
+    ]
 
 
 def reserve_inventory(plan_id: str, quantity: int, order_id: str, user) -> list[dict[str, str]]:
