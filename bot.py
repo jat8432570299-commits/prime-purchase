@@ -35,6 +35,8 @@ SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 IMB_USER_TOKEN = os.getenv("IMB_USER_TOKEN", "")
 IMB_CREATE_ORDER_URL = os.getenv("IMB_CREATE_ORDER_URL", "https://secure-stage.imb.org.in/api/create-order")
 IMB_CHECK_STATUS_URL = os.getenv("IMB_CHECK_STATUS_URL", "https://secure-stage.imb.org.in/api/check-order-status")
+EXISTING_WEBSITE_WEBHOOK_URL = os.getenv("EXISTING_WEBSITE_WEBHOOK_URL", "").strip()
+WEBHOOK_FORWARD_STRICT = os.getenv("WEBHOOK_FORWARD_STRICT", "false").strip().lower() in {"1", "true", "yes", "y"}
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
 
@@ -257,6 +259,25 @@ def is_imb_status_paid(status_response: dict) -> bool:
     return status in {"SUCCESS", "COMPLETED"} or result_status in {"SUCCESS", "COMPLETED"}
 
 
+def forward_to_existing_website(raw_body: bytes, content_type: str) -> bool:
+    if not EXISTING_WEBSITE_WEBHOOK_URL:
+        return True
+
+    headers = {"Content-Type": content_type} if content_type else {}
+    try:
+        response = requests.post(
+            EXISTING_WEBSITE_WEBHOOK_URL,
+            data=raw_body,
+            headers=headers,
+            timeout=20,
+        )
+        response.raise_for_status()
+        return True
+    except requests.RequestException as exc:
+        print(f"Existing website webhook forward failed: {exc}")
+        return False
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Namaste! Legitimate products/services ke liye store bot ready hai.\n\n"
@@ -360,6 +381,11 @@ def payment_thanks():
 
 @flask_app.post("/imb/webhook")
 def imb_webhook():
+    raw_body = request.get_data()
+    forwarded = forward_to_existing_website(raw_body, request.headers.get("Content-Type", ""))
+    if WEBHOOK_FORWARD_STRICT and not forwarded:
+        return {"ok": False, "error": "website forward failed"}, 502
+
     payload = request.form.to_dict(flat=True) or (request.get_json(silent=True) or {})
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     status = str(payload.get("status") or result.get("txnStatus") or result.get("status") or "").upper()

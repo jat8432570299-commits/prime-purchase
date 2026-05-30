@@ -53,6 +53,8 @@ Fill `.env`:
 - `IMB_USER_TOKEN`: IMB Payment Gateway API token.
 - `IMB_CREATE_ORDER_URL`: IMB create order endpoint.
 - `IMB_CHECK_STATUS_URL`: IMB status check endpoint.
+- `EXISTING_WEBSITE_WEBHOOK_URL`: optional old website webhook URL. IMB callback yahan forward ho jayega.
+- `WEBHOOK_FORWARD_STRICT`: `true` karne par old website forward fail hua to IMB ko error return hoga.
 - `PUBLIC_BASE_URL`: ngrok/cloudflared/public domain, for example `https://abc.ngrok-free.app`.
 
 Share Google Sheet with service account email as `Editor`.
@@ -80,6 +82,8 @@ IMB dashboard me webhook/callback URL set karein:
 ```text
 https://your-public-url.example.com/imb/webhook
 ```
+
+Same IMB webhook ko existing website ke saath bhi chalana ho to IMB dashboard me sirf bot ka URL rakhein. Bot callback receive karke `EXISTING_WEBSITE_WEBHOOK_URL` par same payload forward kar dega.
 
 IMB docs ke according Create Order API payment URL, Paytm link, PhonePe link aur BHIM/UPI link return karta hai: https://developer.imb.org.in/Docs/index
 
