@@ -35,7 +35,10 @@ SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 IMB_USER_TOKEN = os.getenv("IMB_USER_TOKEN", "")
 IMB_CREATE_ORDER_URL = os.getenv("IMB_CREATE_ORDER_URL", "https://secure-stage.imb.org.in/api/create-order")
 IMB_CHECK_STATUS_URL = os.getenv("IMB_CHECK_STATUS_URL", "https://secure-stage.imb.org.in/api/check-order-status")
-EXISTING_WEBSITE_WEBHOOK_URL = os.getenv("EXISTING_WEBSITE_WEBHOOK_URL", "").strip()
+EXISTING_WEBSITE_WEBHOOK_URL = os.getenv(
+    "EXISTING_WEBSITE_WEBHOOK_URL",
+    "https://reseller.techsellpro.com/wc-api/upi-payment",
+).strip()
 WEBHOOK_FORWARD_STRICT = os.getenv("WEBHOOK_FORWARD_STRICT", "false").strip().lower() in {"1", "true", "yes", "y"}
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
