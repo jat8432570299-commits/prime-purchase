@@ -415,7 +415,8 @@ def main() -> None:
     ensure_sheet_schema()
 
     telegram_app = build_app()
-    bot_loop = asyncio.get_event_loop()
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
     threading.Thread(target=run_flask, daemon=True).start()
     telegram_app.run_polling(allowed_updates=Update.ALL_TYPES)
 
