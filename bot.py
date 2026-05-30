@@ -148,6 +148,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def today_date_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def require_env() -> None:
     missing = [
         name
@@ -482,7 +486,7 @@ def normalize_inventory_sheet(worksheet, default_pin: str = "") -> None:
             continue
 
         if not values[1].strip():
-            batch_updates.append({"range": f"B{index}", "values": [[now_iso()]]})
+            batch_updates.append({"range": f"B{index}", "values": [[today_date_text()]]})
 
     if batch_updates:
         worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
@@ -628,7 +632,7 @@ def mark_reserved_sold(plan_id: str, order_id: str, quantity: int = 1, username:
     for row_num, row in selected_rows[:quantity]:
         batch_updates.extend(
             [
-                {"range": f"C{row_num}", "values": [[now_iso()]]},
+                {"range": f"C{row_num}", "values": [[today_date_text()]]},
                 {"range": f"D{row_num}", "values": [[username]]},
                 {"range": f"E{row_num}", "values": [[str(telegram_user_id)]]},
                 {"range": f"F{row_num}", "values": [[order_id]]},
@@ -1323,7 +1327,7 @@ async def stock_bulk_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     existing = {str(row.get("mail_id", "")).strip().lower() for row in row_dicts(worksheet)}
     rows = []
     skipped = 0
-    timestamp = now_iso()
+    timestamp = today_date_text()
     for mail_id in mail_ids:
         if mail_id.lower() in existing:
             skipped += 1
