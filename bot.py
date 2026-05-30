@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import os
 import threading
@@ -32,6 +33,7 @@ SHEET_6_MONTH = os.getenv("GOOGLE_WORKSHEET_6_MONTH", "6 Month Inventory")
 SHEET_1_MONTH = os.getenv("GOOGLE_WORKSHEET_1_MONTH", "1 Month Inventory")
 DASHBOARD_SHEET = os.getenv("GOOGLE_WORKSHEET_DASHBOARD", "Dashboard")
 ORDERS_SHEET = os.getenv("GOOGLE_WORKSHEET_ORDERS", "Orders")
+CUSTOMERS_SHEET = os.getenv("GOOGLE_WORKSHEET_CUSTOMERS", "Customers")
 SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
@@ -80,6 +82,15 @@ ORDER_HEADERS = [
     "delivered_items",
     "created_at",
     "paid_at",
+    "notes",
+]
+CUSTOMER_HEADERS = [
+    "telegram_user_id",
+    "username",
+    "first_name",
+    "first_seen",
+    "last_seen",
+    "blocked",
     "notes",
 ]
 DASHBOARD_HEADERS = ["key", "value", "description"]
@@ -186,6 +197,7 @@ def ensure_sheet_schema(force: bool = False):
     six_month = get_or_create_worksheet(spreadsheet, SHEET_6_MONTH, INVENTORY_HEADERS)
     dashboard = get_or_create_worksheet(spreadsheet, DASHBOARD_SHEET, DASHBOARD_HEADERS, rows=80)
     orders = get_or_create_worksheet(spreadsheet, ORDERS_SHEET, ORDER_HEADERS)
+    customers = get_or_create_worksheet(spreadsheet, CUSTOMERS_SHEET, CUSTOMER_HEADERS)
     ensure_dashboard_defaults(dashboard)
     normalize_inventory_sheet(one_month, get_dashboard_value(dashboard, "default_password_or_pin", "ChangeMe123"))
     normalize_inventory_sheet(six_month, get_dashboard_value(dashboard, "default_password_or_pin", "ChangeMe123"))
@@ -195,6 +207,7 @@ def ensure_sheet_schema(force: bool = False):
         SHEET_6_MONTH: six_month,
         DASHBOARD_SHEET: dashboard,
         ORDERS_SHEET: orders,
+        CUSTOMERS_SHEET: customers,
     }
     schema_ready = True
     plan_cache = (0.0, [])
@@ -203,6 +216,50 @@ def ensure_sheet_schema(force: bool = False):
 
 def row_dicts(worksheet) -> list[dict[str, str]]:
     return worksheet.get_all_records()
+
+
+def customers_worksheet():
+    ensure_sheet_schema()
+    return worksheet_cache[CUSTOMERS_SHEET]
+
+
+def remember_customer(user) -> None:
+    if not user:
+        return
+    worksheet = customers_worksheet()
+    user_id = str(user.id)
+    timestamp = now_iso()
+    try:
+        cell = worksheet.find(user_id, in_column=1)
+    except gspread.CellNotFound:
+        worksheet.append_row(
+            [
+                user_id,
+                getattr(user, "username", "") or "",
+                getattr(user, "first_name", "") or "",
+                timestamp,
+                timestamp,
+                "",
+                "",
+            ],
+            value_input_option="USER_ENTERED",
+        )
+        return
+
+    worksheet.update_cell(cell.row, 2, getattr(user, "username", "") or "")
+    worksheet.update_cell(cell.row, 3, getattr(user, "first_name", "") or "")
+    worksheet.update_cell(cell.row, 5, timestamp)
+
+
+def active_customer_ids() -> list[int]:
+    ids = []
+    for row in row_dicts(customers_worksheet()):
+        if str(row.get("blocked", "")).strip().lower() in {"yes", "true", "1", "blocked"}:
+            continue
+        raw_id = str(row.get("telegram_user_id", "")).strip()
+        if raw_id.isdigit():
+            ids.append(int(raw_id))
+    return sorted(set(ids))
 
 
 def ensure_dashboard_defaults(dashboard) -> None:
@@ -631,7 +688,7 @@ def plans_keyboard() -> InlineKeyboardMarkup:
         buttons.append(
             [
                 InlineKeyboardButton(
-                    f"{plan.name} | Rs.{plan.price_inr} | Stock {plan.stock}",
+                    f"🛒 {plan.name} | 💰 Rs.{plan.price_inr} | 📦 Stock {plan.stock}",
                     callback_data=f"plan:{plan.plan_id}",
                 )
             ]
@@ -647,37 +704,64 @@ def quantity_keyboard(plan_id: str, stock: int) -> InlineKeyboardMarkup:
         if quantity <= stock
     ]
     rows = [buttons[index : index + 3] for index in range(0, len(buttons), 3)]
-    rows.append([InlineKeyboardButton("Back", callback_data="back:plans")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="back:plans")])
     return InlineKeyboardMarkup(rows)
 
 
+def welcome_message() -> str:
+    return (
+        "<b>🙏 Namaste! ✨</b>\n"
+        "<b>📦 Inventory Store Ready Hai ✅</b>\n\n"
+        "<b>🛒 Apna Plan Select Karein 👇</b>"
+    )
+
+
+def plans_message() -> str:
+    lines = ["<b>📦 Available Plans ✅</b>", ""]
+    for plan in all_plan_info():
+        lines.extend(
+            [
+                f"<b>🛒 {html.escape(plan.name)}</b>",
+                f"<b>💰 Amount: Rs.{plan.price_inr}</b>",
+                f"<b>📦 Stock: {plan.stock}</b>",
+                "",
+            ]
+        )
+    lines.append("<b>🧾 Buy Command: /buy 1m 1 ya /buy 6m 1</b>")
+    return "\n".join(lines)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    remember_customer(update.effective_user)
     await update.message.reply_text(
-        "Namaste! Inventory store ready hai.\n\nPlan select karein:",
+        welcome_message(),
+        parse_mode=ParseMode.HTML,
         reply_markup=plans_keyboard(),
     )
 
 
 async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lines = ["Available plans"]
-    for plan in all_plan_info():
-        lines.append(f"{plan.name}: Rs.{plan.price_inr} each | Stock: {plan.stock}")
-    lines.append("\nBuy: /buy 1m 2 ya /buy 6m 1")
-    await update.message.reply_text("\n".join(lines), reply_markup=plans_keyboard())
+    remember_customer(update.effective_user)
+    await update.message.reply_text(
+        plans_message(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=plans_keyboard(),
+    )
 
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    remember_customer(update.effective_user)
     if len(context.args) < 2:
-        await update.message.reply_text("Format: /buy 1m 2 ya /buy 6m 1")
+        await update.message.reply_text("<b>🧾 Format: /buy 1m 2 ya /buy 6m 1</b>", parse_mode=ParseMode.HTML)
         return
     plan_id = context.args[0].lower()
     if plan_id not in PLANS:
-        await update.message.reply_text("Plan invalid hai. Use: 1m ya 6m")
+        await update.message.reply_text("<b>❌ Plan invalid hai. Use: 1m ya 6m</b>", parse_mode=ParseMode.HTML)
         return
     try:
         quantity = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("Quantity number me bhejein.")
+        await update.message.reply_text("<b>🔢 Quantity number me bhejein.</b>", parse_mode=ParseMode.HTML)
         return
     await create_order_and_send_payment(update, plan_id, quantity)
 
@@ -685,10 +769,13 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def create_order_and_send_payment(update: Update, plan_id: str, quantity: int) -> None:
     plan = get_plan_info(plan_id)
     if quantity < 1:
-        await update.effective_message.reply_text("Quantity kam se kam 1 honi chahiye.")
+        await update.effective_message.reply_text("<b>🔢 Quantity kam se kam 1 honi chahiye.</b>", parse_mode=ParseMode.HTML)
         return
     if quantity > plan.stock:
-        await update.effective_message.reply_text(f"Stock sirf {plan.stock} bacha hai.")
+        await update.effective_message.reply_text(
+            f"<b>📦 Stock sirf {plan.stock} bacha hai.</b>",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     order_id = ""
@@ -701,14 +788,18 @@ async def create_order_and_send_payment(update: Update, plan_id: str, quantity: 
         if order_id:
             release_reserved_inventory(plan.plan_id, order_id)
         await update.effective_message.reply_text(
-            "Payment order create nahi ho paya. Thodi der baad retry karein ya admin ko batayein."
+            "<b>⚠️ Payment order create nahi ho paya. Thodi der baad retry karein ya admin ko batayein.</b>",
+            parse_mode=ParseMode.HTML,
         )
         print(f"Order error: {exc}")
         return
 
     if not payment_link_url:
         release_reserved_inventory(plan.plan_id, order_id)
-        await update.effective_message.reply_text("Gateway ne payment link return nahi kiya. Admin ko batayein.")
+        await update.effective_message.reply_text(
+            "<b>⚠️ Gateway ne payment link return nahi kiya. Admin ko batayein.</b>",
+            parse_mode=ParseMode.HTML,
+        )
         print(f"Payment response without link for {order_id}: {payment_data}")
         return
 
@@ -718,39 +809,42 @@ async def create_order_and_send_payment(update: Update, plan_id: str, quantity: 
     app_links = "\n".join(
         line
         for line in [
-            f"Paytm: {paytm_link}" if paytm_link else "",
-            f"PhonePe: {phonepe_link}" if phonepe_link else "",
-            f"BHIM/UPI: {bhim_link}" if bhim_link else "",
+            f"<b>📲 Paytm:</b> {html.escape(paytm_link)}" if paytm_link else "",
+            f"<b>📲 PhonePe:</b> {html.escape(phonepe_link)}" if phonepe_link else "",
+            f"<b>🏦 BHIM/UPI:</b> {html.escape(bhim_link)}" if bhim_link else "",
         ]
         if line
     )
 
     await update.effective_message.reply_text(
-        f"Order ban gaya: `{order_id}`\n"
-        f"Plan: *{plan.name}*\n"
-        f"Quantity: *{quantity}*\n"
-        f"Total: *Rs.{plan.price_inr * quantity}*\n\n"
-        f"Payment link:\n{payment_link_url}\n\n"
+        f"<b>✅ Order Ban Gaya!</b>\n\n"
+        f"<b>🧾 Order ID:</b> <code>{html.escape(order_id)}</code>\n"
+        f"<b>🛒 Plan:</b> {html.escape(plan.name)}\n"
+        f"<b>🔢 Quantity:</b> {quantity}\n"
+        f"<b>💰 Total:</b> Rs.{plan.price_inr * quantity}\n\n"
+        f"<b>🔗 Payment Link:</b>\n{html.escape(payment_link_url)}\n\n"
         f"{app_links}\n\n"
-        "Payment successful hote hi inventory items yahin mil jayenge.",
-        parse_mode=ParseMode.MARKDOWN,
+        "<b>✅ Payment successful hote hi inventory items yahin mil jayenge.</b>",
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
 
 
 async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    remember_customer(update.effective_user)
     orders = list_user_orders(update.effective_user.id)
     if not orders:
-        await update.message.reply_text("Aapka koi order abhi Sheet me nahi mila.")
+        await update.message.reply_text("<b>📭 Aapka koi order abhi Sheet me nahi mila.</b>", parse_mode=ParseMode.HTML)
         return
 
-    lines = ["Your orders"]
+    lines = ["<b>🧾 Your Orders</b>", ""]
     for order in orders[-10:]:
         lines.append(
-            f"{order.get('order_id')} - {order.get('plan_name')} x {order.get('quantity')} - "
-            f"Rs.{order.get('amount_inr')} - {order.get('status')}"
+            f"<b>🆔 {html.escape(str(order.get('order_id')))}</b>\n"
+            f"<b>🛒 {html.escape(str(order.get('plan_name')))} x {html.escape(str(order.get('quantity')))}</b>\n"
+            f"<b>💰 Rs.{html.escape(str(order.get('amount_inr')))} | 📌 {html.escape(str(order.get('status')))}</b>\n"
         )
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -779,23 +873,68 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("<b>⛔ Ye admin command hai.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    message = " ".join(context.args).strip()
+    if not message:
+        await update.message.reply_text(
+            "<b>📝 Format:</b>\n<code>/broadcast Your message here</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    sent = 0
+    failed = 0
+    blocked = 0
+    for chat_id in active_customer_ids():
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=message)
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception as exc:
+            failed += 1
+            if "blocked" in str(exc).lower() or "forbidden" in str(exc).lower():
+                blocked += 1
+
+    await update.message.reply_text(
+        "<b>📣 Broadcast Complete ✅</b>\n\n"
+        f"<b>👥 Total:</b> {sent + failed}\n"
+        f"<b>✅ Sent:</b> {sent}\n"
+        f"<b>❌ Failed:</b> {failed}\n"
+        f"<b>🚫 Blocked:</b> {blocked}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     data = query.data or ""
+    remember_customer(query.from_user)
 
     if data == "back:plans":
-        await query.edit_message_text("Plan select karein:", reply_markup=plans_keyboard())
+        await query.edit_message_text(welcome_message(), parse_mode=ParseMode.HTML, reply_markup=plans_keyboard())
         return
 
     if data.startswith("plan:"):
         plan_id = data.split(":", 1)[1]
         plan = get_plan_info(plan_id)
         if plan.stock <= 0:
-            await query.edit_message_text(f"{plan.name} ka stock abhi khatam hai.", reply_markup=plans_keyboard())
+            await query.edit_message_text(
+                f"<b>📦 {html.escape(plan.name)} ka stock abhi khatam hai.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=plans_keyboard(),
+            )
             return
         await query.edit_message_text(
-            f"{plan.name}\nPrice: Rs.{plan.price_inr} each\nStock: {plan.stock}\n\nQuantity select karein:",
+            f"<b>🛒 {html.escape(plan.name)}</b>\n"
+            f"<b>💰 Amount: Rs.{plan.price_inr}</b>\n"
+            f"<b>📦 Stock: {plan.stock}</b>\n\n"
+            f"<b>🔢 Quantity Select Karein 👇</b>",
+            parse_mode=ParseMode.HTML,
             reply_markup=quantity_keyboard(plan_id, plan.stock),
         )
         return
@@ -805,9 +944,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             quantity = int(quantity_text)
         except ValueError:
-            await query.edit_message_text("Quantity invalid hai.")
+            await query.edit_message_text("<b>❌ Quantity invalid hai.</b>", parse_mode=ParseMode.HTML)
             return
-        await query.edit_message_text("Order create ho raha hai...")
+        await query.edit_message_text("<b>⏳ Order create ho raha hai...</b>", parse_mode=ParseMode.HTML)
         await create_order_and_send_payment(update, plan_id, quantity)
 
 
@@ -1050,6 +1189,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("orders", orders_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("dashboard", dashboard_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     return app
 
@@ -1076,8 +1216,6 @@ def main() -> None:
                 BotCommand("products", "Show plans and stock"),
                 BotCommand("buy", "Buy: /buy 1m 1 or /buy 6m 1"),
                 BotCommand("orders", "Show your orders"),
-                BotCommand("dashboard", "Admin dashboard"),
-                BotCommand("sync", "Admin sheet sync"),
             ]
         ),
         bot_loop,
