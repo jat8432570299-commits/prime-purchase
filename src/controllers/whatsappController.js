@@ -2,6 +2,7 @@ const env = require('../config/env');
 const inventoryService = require('../services/inventoryService');
 const orderService = require('../services/orderService');
 const imbService = require('../services/imbService');
+const webhookLogService = require('../services/webhookLogService');
 const { parseIncomingMessage, parseBuy, parseAdd } = require('../utils/parser');
 const { normalizePhone, isAdmin } = require('../utils/phone');
 const { orderSummary } = require('../utils/formatters');
@@ -73,6 +74,13 @@ async function receiveWhatsApp(req, res, next) {
     const incoming = parseIncomingMessage(req.body);
     const mobile = normalizePhone(incoming.mobile);
     const text = incoming.text;
+
+    await webhookLogService.logIncoming({
+      source: 'whatsapp',
+      mobile,
+      message: text,
+      raw: req.body
+    });
 
     if (!mobile || !text) {
       return res.status(200).json({ ok: true, ignored: true });

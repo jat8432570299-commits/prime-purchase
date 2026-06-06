@@ -46,6 +46,7 @@ const env = {
   inventorySheetName: optional('INVENTORY_SHEET_NAME', 'Inventory'),
   ordersSheetName: optional('ORDERS_SHEET_NAME', 'Orders'),
   settingsSheetName: optional('SETTINGS_SHEET_NAME', 'Settings'),
+  webhookLogsSheetName: optional('WEBHOOK_LOGS_SHEET_NAME', 'WebhookLogs'),
   defaultAccountPassword: optional('DEFAULT_ACCOUNT_PASSWORD', 'change_this_password'),
   adminNumbers: csv('ADMIN_NUMBERS').length ? csv('ADMIN_NUMBERS') : csv('ADMIN_TELEGRAM_IDS'),
   accountPrice: numberValue('ACCOUNT_PRICE', 100),

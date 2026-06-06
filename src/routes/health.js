@@ -16,7 +16,8 @@ router.get('/', (req, res) => {
       googleSheetId: env.googleSheetId,
       inventorySheetName: env.inventorySheetName,
       ordersSheetName: env.ordersSheetName,
-      settingsSheetName: env.settingsSheetName
+      settingsSheetName: env.settingsSheetName,
+      webhookLogsSheetName: env.webhookLogsSheetName
     },
     time: new Date().toISOString()
   });
