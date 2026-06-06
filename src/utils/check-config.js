@@ -16,7 +16,8 @@ const checks = [
   ['SMSQuicker WhatsApp account', env.smsquickerWhatsappAccount ? 'set' : 'MISSING'],
   ['WhatsApp send path', env.imbWhatsappSendPath],
   ['Payment create path', env.imbPaymentCreatePath],
-  ['Payment status path', env.imbPaymentStatusPath]
+  ['Payment status path', env.imbPaymentStatusPath],
+  ['Payment polling', env.paymentPollEnabled ? `enabled every ${env.paymentPollIntervalSeconds}s` : 'disabled']
 ];
 
 for (const [label, value] of checks) {

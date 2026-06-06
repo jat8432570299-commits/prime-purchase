@@ -5,6 +5,7 @@ const morgan = require('morgan');
 const env = require('./config/env');
 const webhookRoutes = require('./routes/webhooks');
 const healthRoutes = require('./routes/health');
+const paymentPoller = require('./services/paymentPoller');
 
 const app = express();
 
@@ -57,4 +58,5 @@ app.use((error, req, res, next) => {
 
 app.listen(env.port, () => {
   console.log(`WhatsApp inventory server running on port ${env.port}`);
+  paymentPoller.startPaymentPoller();
 });

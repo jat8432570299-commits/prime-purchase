@@ -35,6 +35,10 @@ services:
         value: /api/create-order
       - key: IMB_PAYMENT_STATUS_PATH
         value: /api/check-order-status
+      - key: PAYMENT_POLL_ENABLED
+        value: true
+      - key: PAYMENT_POLL_INTERVAL_SECONDS
+        value: 60
       - key: IMB_AUTH_HEADER
         value: ""
       - key: IMB_AUTH_SCHEME

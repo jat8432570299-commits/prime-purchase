@@ -56,6 +56,13 @@ async function findRecentOrders(limit = 10) {
   return rows.slice(-limit).reverse();
 }
 
+async function findPendingPaymentOrders(limit = 50) {
+  const { rows } = await listOrders();
+  return rows
+    .filter((row) => row.payment_status === 'pending' && row.delivery_status !== 'delivered')
+    .slice(0, limit);
+}
+
 async function updateOrder(order) {
   const { headers } = await listOrders();
   await sheets.updateRow(env.ordersSheetName, order._rowNumber, sheets.objectToRow(headers, order));
@@ -92,7 +99,7 @@ module.exports = {
   createPendingOrder,
   findOrder,
   findRecentOrders,
+  findPendingPaymentOrders,
   markPaid,
   markDelivered
 };
-

@@ -56,6 +56,8 @@ const env = {
   imbWhatsappSendPath: optional('IMB_WHATSAPP_SEND_PATH', '/api/send-message'),
   imbPaymentCreatePath: optional('IMB_PAYMENT_CREATE_PATH', '/api/create-order'),
   imbPaymentStatusPath: optional('IMB_PAYMENT_STATUS_PATH', '/api/check-order-status'),
+  paymentPollEnabled: booleanValue('PAYMENT_POLL_ENABLED', true),
+  paymentPollIntervalSeconds: numberValue('PAYMENT_POLL_INTERVAL_SECONDS', 60),
   imbAuthHeader: optional('IMB_AUTH_HEADER', ''),
   imbAuthScheme: optional('IMB_AUTH_SCHEME', ''),
   whatsappProvider: optional('WHATSAPP_PROVIDER', 'smsquicker').toLowerCase(),
