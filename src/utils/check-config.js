@@ -4,7 +4,7 @@ const checks = [
   ['Google Sheet ID', env.googleSheetId],
   ['Inventory sheet', env.inventorySheetName],
   ['Orders sheet', env.ordersSheetName],
-  ['Admin numbers', env.adminNumbers.join(', ')],
+  ['Admin numbers', env.adminNumbers.join(', ') || 'fallback: 918432570299'],
   ['IMB API base URL', env.imbApiBaseUrl],
   ['IMB mock mode', env.imbMockMode ? 'enabled' : 'disabled'],
   ['WhatsApp mock mode', env.imbWhatsappMockMode ? 'enabled' : 'disabled'],

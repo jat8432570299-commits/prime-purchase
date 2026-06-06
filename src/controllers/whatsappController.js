@@ -78,7 +78,8 @@ async function receiveWhatsApp(req, res, next) {
       return res.status(200).json({ ok: true, ignored: true });
     }
 
-    if (isAdmin(mobile, env.adminNumbers) && (/^(STOCK|ORDERS|ADD\b)/i.test(text))) {
+    const adminNumbers = env.adminNumbers.length ? env.adminNumbers : ['918432570299'];
+    if (isAdmin(mobile, adminNumbers) && (/^(STOCK|ORDERS|ADD\b)/i.test(text))) {
       await handleAdmin(text, mobile);
       return res.json({ ok: true });
     }

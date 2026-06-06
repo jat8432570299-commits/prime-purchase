@@ -45,7 +45,7 @@ const env = {
   ordersSheetName: optional('ORDERS_SHEET_NAME', 'Orders'),
   settingsSheetName: optional('SETTINGS_SHEET_NAME', 'Settings'),
   defaultAccountPassword: optional('DEFAULT_ACCOUNT_PASSWORD', 'change_this_password'),
-  adminNumbers: csv('ADMIN_NUMBERS'),
+  adminNumbers: csv('ADMIN_NUMBERS').length ? csv('ADMIN_NUMBERS') : csv('ADMIN_TELEGRAM_IDS'),
   accountPrice: numberValue('ACCOUNT_PRICE', 100),
   imbApiBaseUrl: required('IMB_API_BASE_URL').replace(/\/+$/, ''),
   imbApiToken: required('IMB_API_TOKEN'),
