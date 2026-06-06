@@ -1,0 +1,37 @@
+{
+  "name": "whatsapp-inventory-automation",
+  "version": "1.0.0",
+  "description": "WhatsApp unofficial API inventory/order automation with Google Sheets and IMB payment webhooks.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "check": "node src/utils/check-config.js",
+    "setup:sheets": "node scripts/setup-sheets.js",
+    "smoke": "node scripts/smoke-test.js",
+    "check:smsquicker": "node scripts/check-smsquicker.js",
+    "send:test": "node scripts/send-test-message.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "inventory",
+    "google-sheets",
+    "express",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "googleapis": "^173.0.0",
+    "helmet": "^8.0.0",
+    "morgan": "^1.10.0",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

@@ -1,0 +1,69 @@
+services:
+  - type: web
+    name: whatsapp-inventory-automation
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: GOOGLE_SHEET_ID
+        value: 14-a_PZVOs7vbsdtISAyEQH-MD-5zemvIp0JjBW8_Km8
+      - key: INVENTORY_SHEET_NAME
+        value: Inventory
+      - key: ORDERS_SHEET_NAME
+        value: Orders
+      - key: ADMIN_NUMBERS
+        value: 918432570299
+      - key: ACCOUNT_PRICE
+        value: 100
+      - key: IMB_API_BASE_URL
+        value: https://secure-stage.imb.org.in
+      - key: IMB_MOCK_MODE
+        value: false
+      - key: IMB_WHATSAPP_MOCK_MODE
+        value: true
+      - key: IMB_PAYMENT_MOCK_MODE
+        value: false
+      - key: IMB_WHATSAPP_SEND_PATH
+        value: /api/send-message
+      - key: IMB_PAYMENT_CREATE_PATH
+        value: /api/create-order
+      - key: IMB_PAYMENT_STATUS_PATH
+        value: /api/check-order-status
+      - key: IMB_AUTH_HEADER
+        value: ""
+      - key: IMB_AUTH_SCHEME
+        value: ""
+      - key: WHATSAPP_PROVIDER
+        value: smsquicker
+      - key: SMSQUICKER_API_BASE_URL
+        value: https://smsquicker.com
+      - key: SMSQUICKER_SEND_PATH
+        value: /api/send/whatsapp
+      - key: SMSQUICKER_PHONE_FIELD
+        value: recipient
+      - key: SMSQUICKER_MESSAGE_FIELD
+        value: message
+      - key: SMSQUICKER_TYPE
+        value: text
+      - key: SMSQUICKER_MODE
+        value: devices
+      - key: SMSQUICKER_CAMPAIGN
+        value: WhatsApp Inventory
+      - key: SMSQUICKER_SIM
+        value: 1
+      - key: IMB_API_TOKEN
+        sync: false
+      - key: SMSQUICKER_API_SECRET
+        sync: false
+      - key: SMSQUICKER_WHATSAPP_ACCOUNT
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: WEBHOOK_VERIFY_TOKEN
+        sync: false
