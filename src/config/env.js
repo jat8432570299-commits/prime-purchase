@@ -34,11 +34,13 @@ function booleanValue(name, fallback = false) {
   return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
 }
 
+const PROJECT_GOOGLE_SHEET_ID = '14-a_PZVOs7vbsdtISAyEQH-MD-5zemvIp0JjBW8_Km8';
+
 const env = {
   port: numberValue('PORT', 3000),
   nodeEnv: optional('NODE_ENV', 'development'),
   publicBaseUrl: optional('PUBLIC_BASE_URL'),
-  googleSheetId: required('GOOGLE_SHEET_ID'),
+  googleSheetId: PROJECT_GOOGLE_SHEET_ID,
   googleServiceAccountFile: optional('GOOGLE_SERVICE_ACCOUNT_FILE', 'credentials/google-service-account.json'),
   googleServiceAccountJson: optional('GOOGLE_SERVICE_ACCOUNT_JSON'),
   inventorySheetName: optional('INVENTORY_SHEET_NAME', 'Inventory'),
