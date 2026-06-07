@@ -71,7 +71,11 @@ async function handleAdmin(text, mobile) {
 
 async function receiveWhatsApp(req, res, next) {
   try {
-    const incoming = parseIncomingMessage(req.body);
+    const payload = {
+      ...(req.query || {}),
+      ...(req.body || {})
+    };
+    const incoming = parseIncomingMessage(payload);
     const mobile = normalizePhone(incoming.mobile);
     const text = incoming.text;
 
@@ -79,7 +83,7 @@ async function receiveWhatsApp(req, res, next) {
       source: 'whatsapp',
       mobile,
       message: text,
-      raw: req.body
+      raw: payload
     });
 
     if (!mobile || !text) {
@@ -112,6 +116,15 @@ async function receiveWhatsApp(req, res, next) {
 }
 
 function verifyWebhook(req, res) {
+  if (req.query.message || req.query.phone || req.query.mobile || req.query.from) {
+    return receiveWhatsApp(req, res, (error) => {
+      if (error) {
+        console.error(error);
+        return res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+  }
+
   const token = req.query.token || req.query['hub.verify_token'];
   const challenge = req.query.challenge || req.query['hub.challenge'] || 'ok';
 
