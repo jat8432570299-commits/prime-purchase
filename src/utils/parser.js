@@ -15,8 +15,16 @@ function parseIncomingMessage(payload) {
     body.from ||
     body.phone ||
     body.sender ||
+    body.number ||
+    body.msisdn ||
     body?.data?.mobile ||
     body?.data?.from ||
+    body?.data?.phone ||
+    body?.data?.sender ||
+    body?.data?.number ||
+    body?.data?.msisdn ||
+    body?.data?.recipient ||
+    body?.data?.contact ||
     body?.contacts?.[0]?.wa_id ||
     body?.messages?.[0]?.from ||
     '';
